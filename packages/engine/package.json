@@ -1,0 +1,55 @@
+{
+  "name": "@memstream/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "memstream": "./dist/cli.js",
+    "memstream-changefeed": "./dist/changefeed-cli.js",
+    "memstream-propose": "./dist/propose-cli.js",
+    "memstream-setup-db": "./dist/setup-db-cli.js",
+    "memstream-demo-reset": "./dist/demo-reset-cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./naming": {
+      "types": "./dist/naming.d.ts",
+      "import": "./dist/naming.js"
+    }
+  },
+  "scripts": {
+    "embed-schema": "node ./scripts/embed-schema.mjs",
+    "build": "npm run embed-schema && tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "changefeed": "tsx src/changefeed-cli.ts",
+    "propose": "tsx src/propose-cli.ts",
+    "setup-db": "tsx src/setup-db-cli.ts",
+    "demo-reset": "tsx src/demo-reset-cli.ts",
+    "package-lambda": "node ./scripts/package-lambda-zip.mjs",
+    "test": "npm run embed-schema && vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.864.0",
+    "@aws-sdk/client-cloudformation": "^3.1105.0",
+    "@aws-sdk/client-lambda": "^3.864.0",
+    "@aws-sdk/client-s3": "^3.864.0",
+    "@aws-sdk/credential-providers": "^3.864.0",
+    "esbuild": "^0.25.8",
+    "pg": "^8.16.3",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.0",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

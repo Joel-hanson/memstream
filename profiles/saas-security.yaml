@@ -1,0 +1,30 @@
+application: acme-saas
+source_database: defaultdb
+
+changefeed:
+  tables:
+    - users
+  sink: s3
+
+rules:
+  - name: role_escalation
+    table: users
+    when:
+      columns_changed: [role]
+    chunk_template: |
+      Security memory: user {{id}} in org {{org_id}} ({{email}})
+      role changed {{before.role}} → {{after.role}} at {{timestamp}}.
+    tags: [security, role, access]
+
+embedding:
+  model: amazon.titan-embed-text-v2:0
+  table: agent_memory_chunks
+  dimensions: 1024
+
+discovery:
+  enabled: false
+  mode: off
+
+insights:
+  enabled: false
+  schedule: manual

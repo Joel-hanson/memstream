@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Memstream Lambda worker — S3 CDC ObjectCreated → embed → Cockroach memory.
+  Shop/console stay local. Uses an existing CDC bucket (notification wired by deploy).
+
+Parameters:
+  CdcS3Bucket:
+    Type: String
+    Description: Existing S3 bucket used for CDC (and the Lambda zip).
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+
+  CdcS3Prefix:
+    Type: String
+    Default: cdc/
+    Description: Prefix the changefeed writes under.
+
+  DeployObjectKey:
+    Type: String
+    Default: deploy/memstream-lambda.zip
+    Description: Object key for the Lambda deployment package.
+
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional application Cockroach URL. Empty = resolve from memstream_connections at runtime.
+
+  MemstreamDatabaseUrl:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Platform Memstream DB URL (CDC cursor + Connect). Required when DatabaseUrl is empty.
+
+  MemstreamConnectionId:
+    Type: String
+    Default: ""
+    Description: Optional connection UUID for CDC cursor scope.
+
+  BedrockEmbedModel:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+
+  MemoryProfile:
+    Type: String
+    Default: commerce
+    Description: Profile id (or legacy path). Loaded from memstream_profiles.
+
+Resources:
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: memstream-s3-bedrock
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListCdcBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub "arn:aws:s3:::${CdcS3Bucket}"
+              - Sid: ReadCdcAndDeploy
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${CdcS3Bucket}/${CdcS3Prefix}*"
+                  - !Sub "arn:aws:s3:::${CdcS3Bucket}/${DeployObjectKey}"
+              - Sid: BedrockEmbed
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-worker"
+      Description: Memstream S3 CDC → agent memory
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt WorkerRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref CdcS3Bucket
+        S3Key: !Ref DeployObjectKey
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          MEMSTREAM_DATABASE_URL: !Ref MemstreamDatabaseUrl
+          MEMSTREAM_CONNECTION_ID: !Ref MemstreamConnectionId
+          CDC_S3_BUCKET: !Ref CdcS3Bucket
+          CDC_S3_PREFIX: !Ref CdcS3Prefix
+          BEDROCK_EMBED_MODEL: !Ref BedrockEmbedModel
+          MEMORY_PROFILE: !Ref MemoryProfile
+          MEMSTREAM_EMBEDDER: bedrock
+          MEMSTREAM_STORE: cockroach
+          MEMSTREAM_SOURCE: s3
+          PGSSLROOTCERT: /var/task/certs/root.crt
+
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WorkerFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:aws:s3:::${CdcS3Bucket}"
+
+Outputs:
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref WorkerFunction
+
+  FunctionArn:
+    Description: Lambda function ARN (for S3 notification)
+    Value: !GetAtt WorkerFunction.Arn
+
+  RoleArn:
+    Description: Worker IAM role
+    Value: !GetAtt WorkerRole.Arn

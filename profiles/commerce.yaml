@@ -1,0 +1,51 @@
+application: acme-shop
+source_database: defaultdb
+
+changefeed:
+  tables:
+    - orders
+    - stock
+    - tickets
+  sink: s3
+
+rules:
+  - name: order_status_change
+    table: orders
+    when:
+      columns_changed: [status]
+    chunk_template: |
+      Order {{id}} ({{sku}} × {{quantity}}) for customer {{customer_id}}
+      status {{before.status}} → {{after.status}} at {{timestamp}}.
+      Note: {{after.note}}
+    tags: [order, status, shipping]
+
+  - name: stock_drop
+    table: stock
+    when:
+      columns_changed: [quantity]
+    chunk_template: |
+      Inventory change for SKU {{sku}} in warehouse {{warehouse_id}}:
+      {{before.quantity}} → {{after.quantity}} units at {{timestamp}}.
+    tags: [inventory, stock]
+
+  - name: ticket_opened
+    table: tickets
+    when:
+      columns_changed: [status, body]
+    chunk_template: |
+      Support ticket {{id}} for order {{order_id}} is {{after.status}}:
+      {{after.body}} ({{timestamp}})
+    tags: [support, ticket, complaint]
+
+embedding:
+  model: amazon.titan-embed-text-v2:0
+  table: agent_memory_chunks
+  dimensions: 1024
+
+discovery:
+  enabled: false
+  mode: off
+
+insights:
+  enabled: false
+  schedule: manual

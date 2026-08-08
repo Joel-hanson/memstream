@@ -1,0 +1,47 @@
+# Build a linux/amd64 prebuilt Memstream artifact for EC2 (Next standalone + worker).
+# Output layout under /out:
+#   PREBUILT
+#   web/          Next.js standalone (node apps/web/server.js)
+#   worker/       engine dist + production node_modules
+#   certs/        optional CA (filled by package script)
+
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/
+COPY packages/engine/package.json packages/engine/
+COPY packages/mcp/package.json packages/mcp/
+
+RUN npm ci --no-fund --no-audit
+
+COPY . .
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+# Bust stale layer cache when schema/embed wiring changes
+ARG MEMSTREAM_BUILD_ID=embed-schema-v2
+RUN echo "MEMSTREAM_BUILD_ID=${MEMSTREAM_BUILD_ID}" \
+  && npm run build -w @memstream/engine \
+  && npm run build -w @memstream/mcp \
+  && npm run build -w web \
+  && test -f packages/engine/dist/embedded-schema.js \
+  && grep -q MEMSTREAM_SCHEMA_SQL packages/engine/dist/runs.js \
+  && ! grep -q 'join(root, "sql", "memstream.sql")' packages/engine/dist/runs.js
+
+RUN mkdir -p /out/web /out/worker/dist /out/certs \
+  && cp -a apps/web/.next/standalone/. /out/web/ \
+  && mkdir -p /out/web/apps/web/.next \
+  && cp -a apps/web/.next/static /out/web/apps/web/.next/static \
+  && if [ -d apps/web/public ]; then mkdir -p /out/web/apps/web/public && cp -a apps/web/public/. /out/web/apps/web/public/; fi \
+  && cp -a packages/engine/dist/. /out/worker/dist/ \
+  && node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("packages/engine/package.json","utf8")); writeFileSync("/out/worker/package.json", JSON.stringify({ name: "memstream-worker", private: true, type: "module", dependencies: p.dependencies }, null, 2));' \
+  && cd /out/worker && npm install --omit=dev --no-fund --no-audit \
+  && printf 'prebuilt=1\n' > /out/PREBUILT
+
+FROM scratch
+COPY --from=build /out /

@@ -1,0 +1,26 @@
+{
+  "name": "memstream",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @memstream/engine && npm run dev -w web",
+    "build": "npm run build --workspaces --if-present",
+    "build:engine": "npm run build -w @memstream/engine",
+    "build:mcp": "npm run build -w @memstream/mcp",
+    "build:web": "npm run build -w web",
+    "test:engine": "npm run test -w @memstream/engine",
+    "worker": "npm run build -w @memstream/engine && node packages/engine/dist/cli.js",
+    "changefeed": "npm run build -w @memstream/engine && node packages/engine/dist/changefeed-cli.js",
+    "propose": "npm run build -w @memstream/engine && node packages/engine/dist/propose-cli.js",
+    "setup-db": "npm run build -w @memstream/engine && node packages/engine/dist/setup-db-cli.js",
+    "demo-reset": "npm run build -w @memstream/engine && node packages/engine/dist/demo-reset-cli.js",
+    "mcp:ts": "npm run build -w @memstream/mcp && node packages/mcp/dist/cli.js",
+    "lint": "npm run lint -w web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
