@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { consoleFetch } from "@/lib/console-fetch";
+import { consoleApi } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
 type Row = Record<string, unknown>;
@@ -231,11 +231,10 @@ export function ShopClient({
   }
 
   async function copyMcpConfig() {
+    const result = await consoleApi.mcpConfig();
+    if (!result.ok || !result.value.json) return;
     try {
-      const res = await consoleFetch("/api/mcp-config");
-      const data = (await res.json()) as { json?: string };
-      if (!res.ok || !data.json) return;
-      await navigator.clipboard.writeText(data.json);
+      await navigator.clipboard.writeText(result.value.json);
       setMcpCopied(true);
       window.setTimeout(() => setMcpCopied(false), 2000);
     } catch {

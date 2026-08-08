@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getEnableProgress } from "@/components/enable-flow";
 import { previewFlow } from "@/components/memory-flow";
 import { Spinner } from "@/components/ui/spinner";
-import { consoleFetch } from "@/lib/console-fetch";
+import { consoleApi } from "@/lib/api-client";
 import { isUsableDatabaseUrl } from "@/lib/connect-url";
 import { suggestProfileId } from "@/lib/utils";
 import {
@@ -103,23 +103,22 @@ export function ConsoleApp() {
   const loadProfiles = useCallback(async (opts?: { track?: boolean }) => {
     if (opts?.track) setBusy("profiles");
     try {
-      const res = await consoleFetch("/api/profiles");
-      const data = await res.json();
-      if (!res.ok) {
+      const result = await consoleApi.profiles.list();
+      if (!result.ok) {
         setApiHint(
-          data.detail ||
-            "API unreachable. Is `make web` running?",
+          result.error.code === "NETWORK"
+            ? "API unreachable. Is `make web` running?"
+            : result.error.message ||
+                "API unreachable. Is `make web` running?",
         );
         return;
       }
       setApiHint(null);
-      const list = (data.profiles || []) as ProfileInfo[];
+      const list = result.value.profiles || [];
       setProfiles(list);
       if (list.length && !list.some((p) => p.path === profilePath)) {
         setProfilePath(list[0].path);
       }
-    } catch {
-      setApiHint("API unreachable. Is `make web` running?");
     } finally {
       if (opts?.track) {
         setBusy((current) => (current === "profiles" ? null : current));
@@ -129,12 +128,8 @@ export function ConsoleApp() {
 
   const syncTables = useCallback(async (path: string) => {
     if (!path) return;
-    const res = await consoleFetch(
-      `/api/profiles/tables?path=${encodeURIComponent(path)}`,
-    );
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.tables) setTables(data.tables);
+    const result = await consoleApi.profiles.tables(path);
+    if (result.ok && result.value.tables) setTables(result.value.tables);
   }, []);
 
   useEffect(() => {
@@ -143,20 +138,10 @@ export function ConsoleApp() {
         await loadProfiles().then(() => {
           void syncTables(profilePath);
         });
-        try {
-          const res = await consoleFetch("/api/defaults");
-          if (res.ok) {
-            const d = (await res.json()) as {
-              has_url?: boolean;
-              database_url_hint?: string;
-              bucket?: string;
-              region?: string;
-              prefix?: string;
-              connection_id?: string | null;
-              platform_configured?: boolean;
-              worker_compute?: "ec2" | "lambda";
-              source?: string;
-            };
+        {
+          const defaults = await consoleApi.defaults.get();
+          if (defaults.ok) {
+            const d = defaults.value;
             if (d.connection_id) setConnectionId(d.connection_id);
             if (d.has_url) {
               setHasStoredUrl(true);
@@ -181,62 +166,54 @@ export function ConsoleApp() {
               prefix: c.prefix || d.prefix || "cdc/",
             }));
           }
-        } catch {
-          /* ignore prefill failures */
         }
 
-        try {
-          const res = await consoleFetch("/api/runs");
-          if (!res.ok) return;
-          const data = (await res.json()) as {
-            configured?: boolean;
-            runs?: MemstreamRun[];
-            detail?: string;
-          };
-          if (!data.configured) {
-            setApiHint(
-              (prev) =>
-                prev ||
-                "Set MEMSTREAM_DATABASE_URL in .env (platform DB) to store connections and run history.",
-            );
-          }
-          if (data.detail && data.configured) {
-            setApiHint((prev) => prev || `Memstream DB: ${data.detail}`);
-          }
-          const list = data.runs || [];
-          setRuns(list);
-          const run = pickPrimaryRun(list);
-          const storedJobId = readStoredEnableJobId();
-          if (!run) {
-            if (storedJobId) setPendingResumeJobId(storedJobId);
-            return;
-          }
-          // Prefer Live / in-progress over failed history on boot.
-          setActiveRunId(run.id);
-          if (run.connection_id) setConnectionId(run.connection_id);
-          if (run.profile_path) setProfilePath(run.profile_path);
-          if (run.tables) setTables(run.tables);
-          if (run.stack_name) setStackName(run.stack_name);
-          if (run.bucket || run.region || run.prefix) {
-            setConnect((c) => ({
-              ...c,
-              bucket: c.bucket || run.bucket || "",
-              region: c.region || run.region || "us-east-1",
-              prefix: c.prefix || run.prefix || "cdc/",
-            }));
-          }
-          setProfileReady(true);
-          setJob(jobFromRun(run));
-          setWatching(run.status === "succeeded");
-          if (run.status === "running" || run.status === "queued") {
-            const resumeJobId = run.job_id || storedJobId;
-            if (resumeJobId) {
-              storeEnableJobId(resumeJobId);
-              setPendingResumeJobId(resumeJobId);
+        {
+          const runsResult = await consoleApi.runs.list();
+          if (runsResult.ok) {
+            const data = runsResult.value;
+            if (!data.configured) {
+              setApiHint(
+                (prev) =>
+                  prev ||
+                  "Set MEMSTREAM_DATABASE_URL in .env (platform DB) to store connections and run history.",
+              );
+            }
+            if (data.detail && data.configured) {
+              setApiHint((prev) => prev || `Memstream DB: ${data.detail}`);
+            }
+            const list = data.runs || [];
+            setRuns(list);
+            const run = pickPrimaryRun(list);
+            const storedJobId = readStoredEnableJobId();
+            if (!run) {
+              if (storedJobId) setPendingResumeJobId(storedJobId);
+            } else {
+              setActiveRunId(run.id);
+              if (run.connection_id) setConnectionId(run.connection_id);
+              if (run.profile_path) setProfilePath(run.profile_path);
+              if (run.tables) setTables(run.tables);
+              if (run.stack_name) setStackName(run.stack_name);
+              if (run.bucket || run.region || run.prefix) {
+                setConnect((c) => ({
+                  ...c,
+                  bucket: c.bucket || run.bucket || "",
+                  region: c.region || run.region || "us-east-1",
+                  prefix: c.prefix || run.prefix || "cdc/",
+                }));
+              }
+              setProfileReady(true);
+              setJob(jobFromRun(run));
+              setWatching(run.status === "succeeded");
+              if (run.status === "running" || run.status === "queued") {
+                const resumeJobId = run.job_id || storedJobId;
+                if (resumeJobId) {
+                  storeEnableJobId(resumeJobId);
+                  setPendingResumeJobId(resumeJobId);
+                }
+              }
             }
           }
-        } catch {
-          /* ignore run hydrate failures */
         }
       } finally {
         setBooting(false);
@@ -255,24 +232,19 @@ export function ConsoleApp() {
     if (!credentialsSet) return;
     if (opts?.track) setBusy("refresh");
     try {
-      const res = await consoleFetch("/api/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connection_id: connectionId || undefined,
-          database_url: isUsableDatabaseUrl(connect.database_url)
-            ? connect.database_url
-            : undefined,
-          bucket: connect.bucket,
-          region: connect.region,
-          prefix: connect.prefix,
-          profile_path: profilePath,
-          tables,
-          stack_name: stackName,
-        }),
+      const result = await consoleApi.pipeline({
+        connection_id: connectionId || undefined,
+        database_url: isUsableDatabaseUrl(connect.database_url)
+          ? connect.database_url
+          : undefined,
+        bucket: connect.bucket,
+        region: connect.region,
+        prefix: connect.prefix,
+        profile_path: profilePath,
+        tables,
+        stack_name: stackName,
       });
-      const data = await res.json();
-      if (res.ok) setPipeline(data as PipelineStatus);
+      if (result.ok) setPipeline(result.value);
     } finally {
       if (opts?.track) {
         setBusy((current) => (current === "refresh" ? null : current));
@@ -313,10 +285,9 @@ export function ConsoleApp() {
         const runId = data.result?.run_id;
         if (runId) {
           try {
-            await consoleFetch(`/api/runs/${runId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ status: "failed", error: message }),
+            await consoleApi.runs.patch(runId, {
+              status: "failed",
+              error: message,
             });
           } catch {
             /* ignore */
@@ -332,20 +303,15 @@ export function ConsoleApp() {
           log: [...(data.log || []), `ERROR: ${message}`],
           live: false,
         });
-        try {
-          const runsRes = await consoleFetch("/api/runs");
-          if (runsRes.ok) {
-            const body = (await runsRes.json()) as { runs?: MemstreamRun[] };
-            setRuns(body.runs || []);
-          }
-        } catch {
-          /* ignore */
+        {
+          const runsResult = await consoleApi.runs.list();
+          if (runsResult.ok) setRuns(runsResult.value.runs || []);
         }
       };
 
       const tick = async () => {
-        const res = await consoleFetch(`/api/jobs/${id}`);
-        if (!res.ok) {
+        const result = await consoleApi.jobs.get(id);
+        if (!result.ok) {
           staleTicks += 1;
           // Hard miss: no in-memory job and no persisted run.
           if (staleTicks >= 8) {
@@ -361,9 +327,7 @@ export function ConsoleApp() {
           return;
         }
         staleTicks = 0;
-        const data = (await res.json()) as JobStatus & {
-          result?: { shop_url?: string; run_id?: string } | null;
-        };
+        const data = result.value;
         setJob(data);
         if (data.result?.run_id) setActiveRunId(String(data.result.run_id));
         void refreshPipeline();
@@ -372,14 +336,9 @@ export function ConsoleApp() {
           if (pollRef.current) clearInterval(pollRef.current);
           storeEnableJobId(null);
           setBusy(null);
-          try {
-            const runsRes = await consoleFetch("/api/runs");
-            if (runsRes.ok) {
-              const body = (await runsRes.json()) as { runs?: MemstreamRun[] };
-              setRuns(body.runs || []);
-            }
-          } catch {
-            /* ignore */
+          {
+            const runsResult = await consoleApi.runs.list();
+            if (runsResult.ok) setRuns(runsResult.value.runs || []);
           }
         }
       };
@@ -406,10 +365,9 @@ export function ConsoleApp() {
     setBusy(null);
     if (runId) {
       try {
-        await consoleFetch(`/api/runs/${runId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "failed", error: message }),
+        await consoleApi.runs.patch(runId, {
+          status: "failed",
+          error: message,
         });
       } catch {
         /* ignore */
@@ -426,14 +384,9 @@ export function ConsoleApp() {
           }
         : prev,
     );
-    try {
-      const runsRes = await consoleFetch("/api/runs");
-      if (runsRes.ok) {
-        const body = (await runsRes.json()) as { runs?: MemstreamRun[] };
-        setRuns(body.runs || []);
-      }
-    } catch {
-      /* ignore */
+    {
+      const runsResult = await consoleApi.runs.list();
+      if (runsResult.ok) setRuns(runsResult.value.runs || []);
     }
   }, [job?.result?.run_id, activeRunId]);
 
@@ -515,10 +468,9 @@ export function ConsoleApp() {
     setError(null);
     setNotice(null);
     try {
-      const res = await consoleFetch(`/api/runs/${run.id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Could not delete");
+      const result = await consoleApi.runs.delete(run.id);
+      if (!result.ok) {
+        setError(result.error.message || "Could not delete");
         return;
       }
       setDeleteTarget(null);
@@ -575,26 +527,25 @@ export function ConsoleApp() {
     setBusy("propose");
     setError(null);
     try {
-      const res = await consoleFetch("/api/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connection_id: connectionId || undefined,
-          database_url: isUsableDatabaseUrl(connect.database_url)
-            ? connect.database_url
-            : undefined,
-          application,
-        }),
+      const result = await consoleApi.propose({
+        connection_id: connectionId || undefined,
+        database_url: isUsableDatabaseUrl(connect.database_url)
+          ? connect.database_url
+          : undefined,
+        application,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Propose failed");
+      if (!result.ok) {
+        setError(result.error.message || "Propose failed");
+        return;
+      }
+      if (!result.value.profile) {
+        setError("Propose failed");
         return;
       }
       const idHint = saveIdTouched
         ? saveId
         : suggestProfileId(application);
-      applyDraft(data.profile as ProfileDraft, idHint, {
+      applyDraft(result.value.profile, idHint, {
         touchId: saveIdTouched,
       });
     } finally {
@@ -606,12 +557,13 @@ export function ConsoleApp() {
     setBusy("load-profile");
     setError(null);
     try {
-      const res = await consoleFetch(
-        `/api/profiles/load?path=${encodeURIComponent(profilePath)}`,
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Could not load profile");
+      const result = await consoleApi.profiles.load(profilePath);
+      if (!result.ok) {
+        setError(result.error.message || "Could not load profile");
+        return;
+      }
+      if (!result.value.profile) {
+        setError("Could not load profile");
         return;
       }
       const id =
@@ -619,7 +571,7 @@ export function ConsoleApp() {
           .split("/")
           .pop()
           ?.replace(/\.yaml$/, "") || "profile";
-      applyDraft(data.profile as ProfileDraft, id, { touchId: true });
+      applyDraft(result.value.profile, id, { touchId: true });
       await syncTables(profilePath);
     } finally {
       setBusy(null);
@@ -663,18 +615,13 @@ export function ConsoleApp() {
         },
         rules: enabledRules,
       };
-      const res = await consoleFetch("/api/profiles/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: saveId, profile }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Save failed");
+      const result = await consoleApi.profiles.save({ id: saveId, profile });
+      if (!result.ok) {
+        setError(result.error.message || "Save failed");
         return;
       }
-      setProfilePath(data.path || `profiles/${saveId}.yaml`);
-      if (data.tables) setTables(data.tables);
+      setProfilePath(result.value.path || `profiles/${saveId}.yaml`);
+      if (result.value.tables) setTables(result.value.tables);
       await loadProfiles();
       setProfileReady(true);
       setModal("enable");
@@ -699,28 +646,22 @@ export function ConsoleApp() {
     setBusy("connect");
     setError(null);
     try {
-      const res = await consoleFetch("/api/connection", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...connect,
-          id: connectionId || undefined,
-        }),
+      const result = await consoleApi.connection.put({
+        ...connect,
+        id: connectionId || undefined,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Could not save connection");
+      if (!result.ok) {
+        setError(result.error.message || "Could not save connection");
         return;
       }
-      if (data.connection?.id) setConnectionId(String(data.connection.id));
+      const connection = result.value.connection;
+      if (connection?.id) setConnectionId(String(connection.id));
       setHasStoredUrl(true);
-      if (data.connection?.database_url_hint) {
-        setUrlHint(String(data.connection.database_url_hint));
+      if (connection?.database_url_hint) {
+        setUrlHint(String(connection.database_url_hint));
       }
       setConnect((c) => ({ ...c, database_url: "" }));
       setModal("configure");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save connection");
     } finally {
       setBusy(null);
     }
@@ -732,33 +673,28 @@ export function ConsoleApp() {
     setError(null);
     setJob(null);
     try {
-      const res = await consoleFetch("/api/enable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connection_id: connectionId || fromRun?.connection_id || undefined,
-          database_url: isUsableDatabaseUrl(connect.database_url)
-            ? connect.database_url
-            : undefined,
-          bucket: fromRun?.bucket || connect.bucket,
-          region: fromRun?.region || connect.region,
-          prefix: fromRun?.prefix || connect.prefix,
-          profile_path: fromRun?.profile_path || profilePath,
-          tables: fromRun?.tables || tables,
-          deploy,
-          worker_compute: workerCompute,
-          stack_name: fromRun?.stack_name || stackName,
-        }),
+      const result = await consoleApi.enable({
+        connection_id: connectionId || fromRun?.connection_id || undefined,
+        database_url: isUsableDatabaseUrl(connect.database_url)
+          ? connect.database_url
+          : undefined,
+        bucket: fromRun?.bucket || connect.bucket,
+        region: fromRun?.region || connect.region || undefined,
+        prefix: fromRun?.prefix || connect.prefix || undefined,
+        profile_path: fromRun?.profile_path || profilePath,
+        tables: fromRun?.tables || tables,
+        deploy,
+        worker_compute: workerCompute,
+        stack_name: fromRun?.stack_name || stackName,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.detail || "Enable failed");
+      if (!result.ok) {
+        setError(result.error.message || "Enable failed");
         setBusy(null);
         return;
       }
       setModal("enable");
       startWatch();
-      pollJob(data.job_id);
+      pollJob(result.value.job_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Enable failed");
       setBusy(null);
@@ -949,21 +885,17 @@ export function ConsoleApp() {
 
   const copyMcpConfig = useCallback(async () => {
     setError(null);
+    const result = await consoleApi.mcpConfig();
+    if (!result.ok) {
+      setError(result.error.message || "Could not build MCP config");
+      return;
+    }
+    const data = result.value;
+    if (!data.json) {
+      setError("Could not build MCP config");
+      return;
+    }
     try {
-      const res = await consoleFetch("/api/mcp-config");
-      const data = (await res.json()) as {
-        json?: string;
-        ready?: boolean;
-        detail?: string;
-      };
-      if (!res.ok) {
-        setError(data.detail || "Could not build MCP config");
-        return;
-      }
-      if (!data.json) {
-        setError("Could not build MCP config");
-        return;
-      }
       await navigator.clipboard.writeText(data.json);
       setMcpCopied(true);
       window.setTimeout(() => setMcpCopied(false), 2000);

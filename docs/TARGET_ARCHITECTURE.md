@@ -114,10 +114,10 @@ infra/            EC2 (self-host/demo) · Lambda (SaaS/managed worker)
 
 Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
-### Track A — Seams (unblocks SaaS)
+**Track A** — Seams (unblocks SaaS)
 
-1. Split console by feature (Connect / Configure / Enable / Live / Runs) + thin page shell  
-2. Typed API client + shared error/`Result` type  
+1. ✅ Split console by feature (Connect / Configure / Enable / Live / Runs) + thin page shell  
+2. ✅ Typed API client + shared error/`Result` type  
 3. Promote `connection_id` → workspace (+ `org_id` when auth lands)  
 4. Durable enable jobs — platform runs are canonical  
 5. Secrets out of CloudFormation parameters  
@@ -158,4 +158,6 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 **Track A.1** — ✅ Extract Connect / Configure / Enable / Live / Runs from `console-app.tsx` into `apps/web/src/features/console/` (behavior unchanged; orchestrator holds state).
 
-**Track A.2** — Typed API client + shared error/`Result` type (next).
+**Track A.2** — ✅ Typed API client (`lib/api-client.ts`) + `Result`/`ApiError` (`lib/result.ts`); console orchestrator uses `consoleApi`.
+
+**Track A.3** — Promote `connection_id` → workspace (+ `org_id` when auth lands); durable enable jobs (platform runs canonical).
