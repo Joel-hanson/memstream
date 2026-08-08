@@ -39,7 +39,7 @@ cp .env.example .env
 #   CLUSTER_URL='postgresql://.../defaultdb?sslmode=verify-full'
 #   CDC_S3_BUCKET=...
 #   AWS_REGION=us-east-1
-#   MEMSTREAM_WORKER_COMPUTE=ec2
+#   MEMSTREAM_WORKER_COMPUTE=lambda
 
 make setup-db
 # Paste printed memstream URL → MEMSTREAM_DATABASE_URL in .env

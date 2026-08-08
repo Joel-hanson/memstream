@@ -68,7 +68,7 @@ function opsPrefill(root: string): {
     MEMSTREAM_WORKER_COMPUTE:
       process.env.MEMSTREAM_WORKER_COMPUTE ||
       fileEnv.MEMSTREAM_WORKER_COMPUTE ||
-      "ec2",
+      "lambda",
   };
   return {
     bucket: envVal("CDC_S3_BUCKET"),

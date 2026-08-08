@@ -142,7 +142,7 @@ Console configures and observes. Insights stay in the agent.
 | Embeddings | Bedrock (Titan embed; on by default) | Vectors |
 | Ask | Memstream MCP + Cockroach Cloud MCP | RAG + SQL |
 | Config | YAML + console from app schema | Templates + discover |
-| Compute | CloudFormation → **EC2** (default) or **Lambda** worker | `MEMSTREAM_WORKER_COMPUTE=ec2\|lambda` in `.env`; destroy after |
+| Compute | CloudFormation → **Lambda** (default) or **EC2** worker | `MEMSTREAM_WORKER_COMPUTE=lambda\|ec2` in `.env`; destroy after |
 
 Avoid: Fargate/NAT default, Bedrock Agents/KB, full multi-tenant SaaS, investing further in the FastAPI console.
 
@@ -206,7 +206,7 @@ MEMSTREAM_DATABASE_URL=postgresql://...@.../memstream   # required
 MEMSTREAM_SECRETS_KEY=...   # optional; openssl rand -hex 32
 CDC_S3_BUCKET=...           # optional Advanced prefill
 AWS_REGION=us-east-1
-MEMSTREAM_WORKER_COMPUTE=ec2  # or lambda — cloud worker when Enable deploys
+MEMSTREAM_WORKER_COMPUTE=lambda  # or ec2 — cloud worker when Enable deploys
 
 # Console Connect — application DB (encrypted in memstream_connections)
 # Not read from .env by the console.

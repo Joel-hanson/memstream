@@ -20,17 +20,17 @@ const FIXTURES = join(
 );
 
 describe("worker-compute", () => {
-  it("defaults to ec2", () => {
-    expect(resolveWorkerCompute({})).toBe("ec2");
-    expect(resolveWorkerCompute({ MEMSTREAM_WORKER_COMPUTE: "EC2" })).toBe(
-      "ec2",
+  it("defaults to managed lambda", () => {
+    expect(resolveWorkerCompute({})).toBe("lambda");
+    expect(resolveWorkerCompute({ MEMSTREAM_WORKER_COMPUTE: "LAMBDA" })).toBe(
+      "lambda",
     );
   });
 
-  it("accepts lambda", () => {
+  it("accepts ec2 for self-host", () => {
     expect(
-      resolveWorkerCompute({ MEMSTREAM_WORKER_COMPUTE: "lambda" }),
-    ).toBe("lambda");
+      resolveWorkerCompute({ MEMSTREAM_WORKER_COMPUTE: "ec2" }),
+    ).toBe("ec2");
   });
 
   it("accepts override over env", () => {

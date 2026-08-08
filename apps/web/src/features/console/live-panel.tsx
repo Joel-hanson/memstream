@@ -197,7 +197,7 @@ export function EnableLogCard({ job }: { job: JobStatus }) {
                 <span className="font-mono text-foreground">
                   infra/deployer-policy.json
                 </span>{" "}
-                to your AWS user, or turn off “Start memory worker in the cloud”
+                as a managed policy, or turn off “Start managed cloud worker”
                 and run the worker locally.
               </p>
             ) : null}

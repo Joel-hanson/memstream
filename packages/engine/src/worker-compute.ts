@@ -1,4 +1,5 @@
-/** Platform cloud worker target — from MEMSTREAM_WORKER_COMPUTE (.env only). */
+/** Platform cloud worker target — from MEMSTREAM_WORKER_COMPUTE (.env only).
+ * Default is managed Lambda (SaaS). EC2 is self-host / demo-box. */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -39,7 +40,8 @@ export function resolveWorkerCompute(
       .trim()
       .toLowerCase();
   }
-  return raw === "lambda" ? "lambda" : "ec2";
+  // Unset → managed Lambda (SaaS default). Explicit "ec2" for self-host/demo.
+  return raw === "ec2" ? "ec2" : "lambda";
 }
 
 /**
@@ -74,5 +76,5 @@ export function cloudWorkerStackName(
 }
 
 export function workerComputeLabel(compute: WorkerCompute): string {
-  return compute === "lambda" ? "Lambda" : "EC2";
+  return compute === "lambda" ? "Managed Lambda" : "EC2";
 }

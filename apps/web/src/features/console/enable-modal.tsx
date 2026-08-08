@@ -109,11 +109,44 @@ export function EnableModal({
                 ? "Ship an order in the shop, then ask from Cursor."
                 : enableProgress.phase === "failed"
                   ? enableProgress.headline
-                  : "Start indexing writes for your watched tables."}
+                  : deploy
+                    ? workerCompute === "lambda"
+                      ? "Indexes watched tables and starts a managed Lambda worker on your CDC bucket."
+                      : "Indexes watched tables and starts an EC2 memory worker (self-host / demo)."
+                    : "Indexes watched tables. Run the worker locally afterward."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto">
+          {enableProgress.phase === "idle" ? (
+            <p className="border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              {deploy ? (
+                workerCompute === "lambda" ? (
+                  <>
+                    <span className="text-foreground">Managed Lambda</span> is
+                    the default cloud worker — S3-triggered, no EC2 box to
+                    babysit. Change compute under Advanced if you need EC2.
+                  </>
+                ) : (
+                  <>
+                    Using{" "}
+                    <span className="text-foreground">EC2</span> (self-host /
+                    demo). Prefer Managed Lambda unless you need the on-box
+                    watcher.
+                  </>
+                )
+              ) : (
+                <>
+                  Cloud worker is off — Enable will set up schema and
+                  changefeed only. Run{" "}
+                  <span className="font-mono text-foreground">
+                    make watch-cloud
+                  </span>{" "}
+                  locally, or turn the cloud worker on under Advanced.
+                </>
+              )}
+            </p>
+          ) : null}
           <EnableResources
             job={job}
             tables={tables}
@@ -200,13 +233,13 @@ export function EnableModal({
                   onCheckedChange={(v) => onDeployChange(v === true)}
                 />
                 <FieldLabel htmlFor="deploy" className="font-normal">
-                  Start memory worker in the cloud
+                  Start managed cloud worker
                 </FieldLabel>
               </Field>
               {deploy ? (
                 <Field>
                   <FieldLabel htmlFor="workerCompute">
-                    <TermHint hint="EC2 uses the on-box watcher when Enable runs on the demo host; Lambda deploys a separate S3-triggered function.">
+                    <TermHint hint="Managed Lambda (recommended): S3-triggered function. EC2: self-host / demo box with memstream-watch.">
                       Worker compute
                     </TermHint>
                   </FieldLabel>
@@ -216,12 +249,12 @@ export function EnableModal({
                     value={workerCompute}
                     onChange={(e) =>
                       onWorkerComputeChange(
-                        e.target.value === "lambda" ? "lambda" : "ec2",
+                        e.target.value === "ec2" ? "ec2" : "lambda",
                       )
                     }
                   >
-                    <option value="ec2">EC2 (memstream-watch)</option>
-                    <option value="lambda">Lambda</option>
+                    <option value="lambda">Managed Lambda (recommended)</option>
+                    <option value="ec2">EC2 (self-host / demo)</option>
                   </select>
                 </Field>
               ) : null}

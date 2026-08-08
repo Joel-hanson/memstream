@@ -84,7 +84,7 @@ BEDROCK_EMBED_MODEL=amazon.titan-embed-text-v2:0
 MEMSTREAM_EMBEDDER=bedrock
 MEMSTREAM_STORE=cockroach
 MEMSTREAM_SOURCE=s3
-MEMSTREAM_WORKER_COMPUTE=ec2   # or lambda
+MEMSTREAM_WORKER_COMPUTE=lambda   # default; ec2 for self-host / demo box
 # Optional keyless CDC sink (AUTH=implicit + ASSUME_ROLE):
 # MEMSTREAM_CDC_ROLE_ARN=arn:aws:iam::ACCOUNT:role/memstream-cdc
 ```
@@ -124,7 +124,12 @@ make watch-cloud
 # shop: http://127.0.0.1:3000/shop
 ```
 
-**B — EC2** (demo on AWS):
+**B — Managed Lambda** (default cloud worker):
+
+In Enable, leave **Start managed cloud worker** on (Advanced → Worker compute =
+Managed Lambda). Or set `MEMSTREAM_WORKER_COMPUTE=lambda` in `.env`.
+
+**C — EC2** (demo box / self-host):
 
 ```bash
 make deploy-aws
@@ -134,9 +139,11 @@ make deploy-aws
 # optional: SHOP_CIDR=YOUR_PUBLIC_IP/32 to lock the SG to your IP
 # shell: aws ssm start-session (no SSH ingress)
 ```
-Or in Enable: check **Start memory worker in the cloud**.
 
-**Lambda** instead of EC2 watch: set `MEMSTREAM_WORKER_COMPUTE=lambda`, or in Enable → Advanced pick **Lambda**. Works from laptop or the EC2 console (prebuilt ships `infra/lambda.yaml` + zip; Enable stops `memstream-watch`). Do not run EC2 watch and Lambda on the same bucket/prefix.
+Or in Enable → Advanced pick **EC2 (self-host / demo)** with the cloud worker on.
+Set `MEMSTREAM_WORKER_COMPUTE=ec2` if you want that default.
+
+Do not run EC2 `memstream-watch` and Lambda on the same bucket/prefix.
 
 ### 10. Tear down
 

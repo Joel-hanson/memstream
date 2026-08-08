@@ -47,7 +47,7 @@ export function ConsoleApp() {
   const [profilePath, setProfilePath] = useState("profiles/commerce.yaml");
   const [tables, setTables] = useState("orders,stock");
   const [deploy, setDeploy] = useState(true);
-  const [workerCompute, setWorkerCompute] = useState<"ec2" | "lambda">("ec2");
+  const [workerCompute, setWorkerCompute] = useState<"ec2" | "lambda">("lambda");
   const [stackName, setStackName] = useState("memstream-demo");
   const [configMode, setConfigMode] = useState<"template" | "discover">(
     "template",
@@ -788,7 +788,9 @@ export function ConsoleApp() {
   ).filter((b) => b.id !== "shop");
 
   const workerStamp = deploy
-    ? `AWS · ${activeRun?.stack_name || stackName || "cloud"}`
+    ? workerCompute === "lambda"
+      ? `Managed Lambda · ${activeRun?.stack_name || stackName || "cloud"}`
+      : `EC2 · ${activeRun?.stack_name || stackName || "cloud"}`
     : "Local worker";
 
   const setupLogLines =

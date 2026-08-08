@@ -126,7 +126,7 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 | Feature | Why |
 | --- | --- |
 | Thin orgs + invite | SaaS entry |
-| Managed worker as first-class Enable path | Less AWS homework |
+| ✅ Managed worker as first-class Enable path | Less AWS homework |
 | Self-host runbook (same packages) | Optional path |
 | ✅ Connection health + memory lag on Live | Trust |
 | Profile versioning | Real rule edits |
@@ -166,3 +166,5 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 **Track B** — Product features (orgs, managed worker polish, self-host runbook, …).
 
 **Track B.1** — ✅ Connection health + memory lag on Live (`pipeline.health` from `/api/pipeline`; App DB / changefeed / lag vs newest CDC object).
+
+**Track B.2** — ✅ Managed Lambda is the default Enable cloud worker (`resolveWorkerCompute` + Enable UI); EC2 remains self-host/demo under Advanced.
