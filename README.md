@@ -86,4 +86,4 @@ packages/mcp/     search_memory MCP
 profiles/ sql/ docs/ examples/ scripts/ infra/
 ```
 
-Design notes: [PLAN.md](PLAN.md).
+Design notes: [PLAN.md](PLAN.md). Target architecture: [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md).

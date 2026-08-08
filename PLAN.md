@@ -4,6 +4,8 @@ Notes for the CockroachDB × AWS hackathon. Source of truth for what we are buil
 
 **Memstream** is live agent memory for apps on CockroachDB.
 
+**Post-hackathon target** (data residency, SaaS + optional self-host, dual-track refactor): [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md).
+
 ## Product direction (current)
 
 We are building Memstream as a **product**, not only a demo pipeline:
