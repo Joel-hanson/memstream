@@ -100,6 +100,7 @@ export {
 export {
   applySchema,
   buildPipelineStatus,
+  cdcProcessedStats,
   changefeedMetrics,
   consoleDir,
   listProfiles,
@@ -112,14 +113,25 @@ export {
   repoRoot,
   runEnablePipeline,
   saveProfileYaml,
+  s3CdcSnapshot,
   s3ObjectCount,
   sessionEnvPath,
   splitSqlStatements,
   stackOutputs,
   teardownAndDeleteRun,
   writeSessionEnv,
+  type S3CdcSnapshot,
   type TeardownResult,
 } from "./console-actions.js";
+export {
+  computeLagSeconds,
+  derivePipelineHealth,
+  MEMORY_LAG_WARN_SECONDS,
+  type CheckStatus,
+  type DerivePipelineHealthInput,
+  type HealthLevel,
+  type PipelineHealth,
+} from "./pipeline-health.js";
 export {
   resolveClusterUrl,
   setupDatabases,
@@ -172,6 +184,13 @@ export {
   type DeleteAwsStackOptions,
   type DeployAwsOptions,
 } from "./deploy-aws.js";
+export {
+  upsertDeployConfigSecret,
+  getDeployConfigSecret,
+  applyDeployConfigSecretFromEnv,
+  deployConfigSecretName,
+  type DeployConfigSecret,
+} from "./deploy-secrets.js";
 export {
   deployLambdaStack,
   deleteLambdaStack,

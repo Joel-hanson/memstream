@@ -47,6 +47,37 @@ export type PipelineNode = {
   href?: string;
 };
 
+export type PipelineHealthStatus = "ok" | "degraded" | "down" | "unknown";
+export type PipelineCheckStatus =
+  | "ok"
+  | "warn"
+  | "error"
+  | "idle"
+  | "unknown";
+
+export type PipelineHealth = {
+  status: PipelineHealthStatus;
+  connection: {
+    status: PipelineCheckStatus;
+    detail: string;
+  };
+  changefeed: {
+    status: PipelineCheckStatus;
+    jobs: number;
+    running: number;
+    detail: string;
+  };
+  memory: {
+    status: PipelineCheckStatus;
+    lag_seconds: number | null;
+    latest_chunk_at: string | null;
+    latest_cdc_at: string | null;
+    processed_keys: number | null;
+    last_processed_at: string | null;
+    detail: string;
+  };
+};
+
 export type PipelineStatus = {
   sources: PipelineNode[];
   bindings: PipelineNode[];
@@ -62,7 +93,12 @@ export type PipelineStatus = {
     s3_objects?: number | null;
     latest_at?: string | null;
     by_rule?: { rule: string; count: number }[];
+    lag_seconds?: number | null;
+    latest_cdc_at?: string | null;
+    processed_keys?: number | null;
+    last_processed_at?: string | null;
   };
+  health?: PipelineHealth;
   recent: {
     created_at: string;
     rule_name: string;
@@ -70,6 +106,7 @@ export type PipelineStatus = {
     body: string;
   }[];
   db_error?: string;
+  db_ok?: boolean;
 };
 
 export type JobStepStatus =

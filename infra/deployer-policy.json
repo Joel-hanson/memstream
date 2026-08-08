@@ -101,7 +101,7 @@
         "s3:GetBucketNotification",
         "s3:PutBucketNotification"
       ],
-      "Resource": "arn:aws:s3:::REPLACE_ME_BUCKET"
+      "Resource": "arn:aws:s3:::memstream-cdc"
     },
     {
       "Sid": "UploadDeployTarball",
@@ -112,9 +112,21 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::REPLACE_ME_BUCKET",
-        "arn:aws:s3:::REPLACE_ME_BUCKET/*"
+        "arn:aws:s3:::memstream-cdc",
+        "arn:aws:s3:::memstream-cdc/*"
       ]
+    },
+    {
+      "Sid": "MemstreamDeploySecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:memstream/*"
     }
   ]
 }

@@ -36,25 +36,31 @@ Parameters:
     Default: deploy/memstream-prebuilt.tgz
     Description: Object key for the prebuilt tarball uploaded by scripts/deploy-aws.sh.
 
+  ConfigSecretArn:
+    Type: String
+    Default: ""
+    Description: >
+      Secrets Manager ARN for JSON {DATABASE_URL, MEMSTREAM_DATABASE_URL, MEMSTREAM_SECRETS_KEY}.
+      Prefer this over legacy plaintext parameters (which should stay empty).
+
+  # Legacy — leave empty. Kept so existing stacks can update; secrets belong in ConfigSecretArn.
   DatabaseUrl:
     Type: String
     NoEcho: true
     Default: ""
-    Description: Optional application Cockroach URL. Empty = resolve from memstream_connections on the instance.
+    Description: DEPRECATED. Use ConfigSecretArn.
 
   MemstreamDatabaseUrl:
     Type: String
     NoEcho: true
     Default: ""
-    Description: Platform Memstream DB URL (connections + CDC cursor). Required for Connect-backed app URL.
+    Description: DEPRECATED. Use ConfigSecretArn.
 
   MemstreamSecretsKey:
     Type: String
     NoEcho: true
     Default: ""
-    Description: >-
-      AES key for encrypting Connect URLs in memstream_connections
-      (openssl rand -hex 32). Required when Enable runs on this instance.
+    Description: DEPRECATED. Use ConfigSecretArn.
 
   MemstreamWorkerCompute:
     Type: String
@@ -88,6 +94,7 @@ Parameters:
 
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+  HasConfigSecret: !Not [!Equals [!Ref ConfigSecretArn, ""]]
   UseArmAmi: !Or
     - !Equals [!Ref InstanceType, t4g.micro]
     - !Equals [!Ref InstanceType, t4g.small]
@@ -196,6 +203,15 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                 Resource: "*"
+              - Sid: ReadDeployConfigSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !If
+                  - HasConfigSecret
+                  - !Ref ConfigSecretArn
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:memstream/*"
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -235,7 +251,7 @@ Resources:
           set -euxo pipefail
           exec > >(tee /var/log/memstream-userdata.log) 2>&1
 
-          dnf install -y tar gzip awscli
+          dnf install -y tar gzip awscli python3
           # AL2023 ships curl-minimal (provides `curl`); do not install curl — it conflicts.
           # AL2023 default nodejs is 18; Memstream / Next 15 need >=20
           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
@@ -260,9 +276,6 @@ Resources:
           fi
 
           cat > /opt/memstream/.env <<'ENVEOF'
-          DATABASE_URL=${DatabaseUrl}
-          MEMSTREAM_DATABASE_URL=${MemstreamDatabaseUrl}
-          MEMSTREAM_SECRETS_KEY=${MemstreamSecretsKey}
           AWS_REGION=${AWS::Region}
           CDC_S3_BUCKET=${CdcS3Bucket}
           CDC_S3_PREFIX=${CdcS3Prefix}
@@ -282,7 +295,38 @@ Resources:
           HOSTNAME=0.0.0.0
           PGSSLROOTCERT=/opt/memstream/certs/root.crt
           MEMSTREAM_SSLROOTCERT=/opt/memstream/certs/root.crt
+          CONFIG_SECRET_ARN=${ConfigSecretArn}
           ENVEOF
+          # Secrets from Secrets Manager (preferred) or legacy CFN params (empty in new deploys)
+          python3 <<'PY'
+          import json, subprocess
+          env_path = "/opt/memstream/.env"
+          arn = "${ConfigSecretArn}".strip()
+          values = {
+            "DATABASE_URL": """${DatabaseUrl}""",
+            "MEMSTREAM_DATABASE_URL": """${MemstreamDatabaseUrl}""",
+            "MEMSTREAM_SECRETS_KEY": """${MemstreamSecretsKey}""",
+          }
+          if arn:
+            try:
+              out = subprocess.check_output(
+                ["aws", "secretsmanager", "get-secret-value",
+                 "--secret-id", arn, "--query", "SecretString", "--output", "text"],
+                text=True,
+              )
+              parsed = json.loads(out)
+              for k in ("DATABASE_URL", "MEMSTREAM_DATABASE_URL", "MEMSTREAM_SECRETS_KEY"):
+                if parsed.get(k):
+                  values[k] = str(parsed[k])
+            except Exception as e:
+              print(f"WARN: could not load ConfigSecretArn: {e}", flush=True)
+          with open(env_path, "a", encoding="utf-8") as f:
+            for k, v in values.items():
+              if not v:
+                continue
+              esc = v.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+              f.write(f'{k}="{esc}"\n')
+          PY
           chmod 600 /opt/memstream/.env
           if [[ ! -f /opt/memstream/certs/root.crt ]]; then
             echo "WARN: certs/root.crt missing from package — Cockroach TLS may fail" >&2

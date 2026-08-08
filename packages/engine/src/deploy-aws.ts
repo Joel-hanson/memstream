@@ -16,6 +16,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stageRepoCaCert } from "./ca-cert.js";
 import { resolveAppDatabaseUrl } from "./connections.js";
+import { upsertDeployConfigSecret } from "./deploy-secrets.js";
 import type { Job } from "./jobs.js";
 
 export type DeployAwsOptions = {
@@ -92,26 +93,20 @@ async function uploadTarball(
   );
 }
 
-function stackParameters(options: DeployAwsOptions, deployKey: string) {
+function stackParameters(
+  options: DeployAwsOptions,
+  deployKey: string,
+  configSecretArn: string,
+) {
   const params = [
     { ParameterKey: "CdcS3Bucket", ParameterValue: options.bucket },
     { ParameterKey: "CdcS3Prefix", ParameterValue: options.prefix || "cdc/" },
     { ParameterKey: "DeployObjectKey", ParameterValue: deployKey },
-    {
-      ParameterKey: "DatabaseUrl",
-      ParameterValue: options.databaseUrl || "",
-    },
-    {
-      ParameterKey: "MemstreamDatabaseUrl",
-      ParameterValue:
-        options.memstreamDatabaseUrl ||
-        process.env.MEMSTREAM_DATABASE_URL ||
-        "",
-    },
-    {
-      ParameterKey: "MemstreamSecretsKey",
-      ParameterValue: process.env.MEMSTREAM_SECRETS_KEY || "",
-    },
+    { ParameterKey: "ConfigSecretArn", ParameterValue: configSecretArn },
+    // Intentionally empty — secrets live in Secrets Manager
+    { ParameterKey: "DatabaseUrl", ParameterValue: "" },
+    { ParameterKey: "MemstreamDatabaseUrl", ParameterValue: "" },
+    { ParameterKey: "MemstreamSecretsKey", ParameterValue: "" },
     {
       ParameterKey: "MemstreamWorkerCompute",
       ParameterValue:
@@ -192,7 +187,7 @@ export async function deployAwsStack(
   if (databaseUrl) {
     log(
       options.job,
-      "Application DB URL from Connect / DATABASE_URL (baked into instance .env as fallback)",
+      "Application DB URL from Connect / DATABASE_URL (stored in Secrets Manager)",
     );
   } else {
     log(
@@ -200,6 +195,20 @@ export async function deployAwsStack(
       "No application DB URL yet — EC2 will load it from memstream_connections",
     );
   }
+
+  const secret = await upsertDeployConfigSecret({
+    stackName,
+    region,
+    values: {
+      DATABASE_URL: databaseUrl || "",
+      MEMSTREAM_DATABASE_URL: memstreamUrl,
+      MEMSTREAM_SECRETS_KEY: process.env.MEMSTREAM_SECRETS_KEY || "",
+    },
+  });
+  log(
+    options.job,
+    `Deploy config secret ${secret.name} (ARN not logged)`,
+  );
 
   const resolved: DeployAwsOptions = {
     ...options,
@@ -224,7 +233,7 @@ export async function deployAwsStack(
 
   const cfn = new CloudFormationClient({ region });
   const templateBody = readFileSync(templatePath, "utf-8");
-  const parameters = stackParameters(resolved, deployKey);
+  const parameters = stackParameters(resolved, deployKey, secret.arn);
   const status = await currentStackStatus(cfn, stackName);
 
   if (!status || status === "DELETE_COMPLETE") {

@@ -44,6 +44,8 @@ import {
   workerComputeLabel,
   type WorkerCompute,
 } from "./worker-compute.js";
+import { derivePipelineHealth } from "./pipeline-health.js";
+import { cdcScopeId } from "./state.js";
 
 /** Stop on-box S3 poller so Lambda is the only consumer of the CDC prefix. */
 function stopPrebuiltWatch(job: Job): void {
@@ -334,15 +336,23 @@ export async function changefeedMetrics(
   });
 }
 
-export async function s3ObjectCount(
+export type S3CdcSnapshot = {
+  count: number;
+  /** ISO timestamp of the newest object under the prefix. */
+  latestAt: string | null;
+};
+
+/** List CDC prefix: object count + newest LastModified (one pass). */
+export async function s3CdcSnapshot(
   bucket: string,
   prefix = "cdc/",
   region = "us-east-1",
-): Promise<number | null> {
+): Promise<S3CdcSnapshot | null> {
   if (!bucket) return null;
   try {
     const client = new S3Client({ region });
     let total = 0;
+    let latestMs = 0;
     let token: string | undefined;
     do {
       const page = await client.send(
@@ -352,10 +362,55 @@ export async function s3ObjectCount(
           ContinuationToken: token,
         }),
       );
-      total += page.KeyCount ?? page.Contents?.length ?? 0;
+      for (const obj of page.Contents || []) {
+        total += 1;
+        const lm = obj.LastModified?.getTime();
+        if (lm != null && lm > latestMs) latestMs = lm;
+      }
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token);
-    return total;
+    return {
+      count: total,
+      latestAt: latestMs > 0 ? new Date(latestMs).toISOString() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function s3ObjectCount(
+  bucket: string,
+  prefix = "cdc/",
+  region = "us-east-1",
+): Promise<number | null> {
+  const snap = await s3CdcSnapshot(bucket, prefix, region);
+  return snap?.count ?? null;
+}
+
+/** Platform cursor stats for a CDC scope (connection or s3:bucket:prefix). */
+export async function cdcProcessedStats(
+  scopeId: string,
+  root = repoRoot(),
+): Promise<{ count: number; last_processed_at: string | null } | null> {
+  const url = memstreamDatabaseUrl(root);
+  if (!url || !scopeId.trim()) return null;
+  try {
+    return await withClientObjects(url, async (client) => {
+      const result = await client.query(
+        `
+        SELECT count(*)::int AS n, max(processed_at)::text AS last_at
+        FROM memstream_cdc_keys
+        WHERE scope_id = $1
+        `,
+        [scopeId],
+      );
+      const row = result.rows[0];
+      return {
+        count: Number(row?.n ?? 0),
+        last_processed_at:
+          row?.last_at != null ? String(row.last_at) : null,
+      };
+    });
   } catch {
     return null;
   }
@@ -424,9 +479,34 @@ export async function buildPipelineStatus(options: {
     }
   }
 
-  const s3Count = bucket ? await s3ObjectCount(bucket, prefix, region) : null;
+  const s3Snap = bucket ? await s3CdcSnapshot(bucket, prefix, region) : null;
+  const s3Count = s3Snap?.count ?? null;
+  const latestCdcAt = s3Snap?.latestAt ?? null;
   const outs = await stackOutputs(stackName, region);
   const shopUrl = outs.ShopUrl ?? null;
+
+  const scopeId = cdcScopeId({
+    connectionId,
+    source: "s3",
+    bucket: bucket || null,
+    prefix,
+  });
+  const processed = await cdcProcessedStats(scopeId, root);
+
+  const health = derivePipelineHealth({
+    databaseUrlSet: Boolean(databaseUrl),
+    dbOk,
+    dbError,
+    changefeedJobs: feeds.jobs,
+    changefeedRunning: feeds.running,
+    chunkCount: mem.chunks,
+    latestChunkAt: mem.latest_at,
+    latestCdcAt,
+    s3Objects: s3Count,
+    bucketSet: Boolean(bucket),
+    processedKeys: processed?.count ?? null,
+    lastProcessedAt: processed?.last_processed_at ?? null,
+  });
 
   return {
     session: {
@@ -530,7 +610,12 @@ export async function buildPipelineStatus(options: {
       s3_objects: s3Count,
       latest_at: mem.latest_at,
       by_rule: mem.by_rule,
+      lag_seconds: health.memory.lag_seconds,
+      latest_cdc_at: latestCdcAt,
+      processed_keys: processed?.count ?? null,
+      last_processed_at: processed?.last_processed_at ?? null,
     },
+    health,
     recent,
     shop_url: shopUrl || "/shop",
     db_ok: dbOk,

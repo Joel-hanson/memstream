@@ -40,6 +40,7 @@ import {
   type DeleteAwsStackOptions,
 } from "./deploy-aws.js";
 import { resolveAppDatabaseUrl } from "./connections.js";
+import { upsertDeployConfigSecret } from "./deploy-secrets.js";
 import type { Job } from "./jobs.js";
 import { resolveCaCertPath } from "./ca-cert.js";
 import { stripSslRootCert } from "./store-cockroach.js";
@@ -169,22 +170,18 @@ async function uploadZip(
   );
 }
 
-function stackParameters(options: DeployLambdaOptions, deployKey: string) {
-  const databaseUrl = rewriteUrlForLambda(options.databaseUrl || "");
-  const memstreamUrl = rewriteUrlForLambda(
-    options.memstreamDatabaseUrl ||
-      process.env.MEMSTREAM_DATABASE_URL ||
-      "",
-  );
+function stackParameters(
+  options: DeployLambdaOptions,
+  deployKey: string,
+  configSecretArn: string,
+) {
   return [
     { ParameterKey: "CdcS3Bucket", ParameterValue: options.bucket },
     { ParameterKey: "CdcS3Prefix", ParameterValue: options.prefix || "cdc/" },
     { ParameterKey: "DeployObjectKey", ParameterValue: deployKey },
-    { ParameterKey: "DatabaseUrl", ParameterValue: databaseUrl },
-    {
-      ParameterKey: "MemstreamDatabaseUrl",
-      ParameterValue: memstreamUrl,
-    },
+    { ParameterKey: "ConfigSecretArn", ParameterValue: configSecretArn },
+    { ParameterKey: "DatabaseUrl", ParameterValue: "" },
+    { ParameterKey: "MemstreamDatabaseUrl", ParameterValue: "" },
     {
       ParameterKey: "MemstreamConnectionId",
       ParameterValue: options.connectionId || "",
@@ -335,13 +332,27 @@ export async function deployLambdaStack(
     memstreamDatabaseUrl: memstreamUrl,
   };
   if (databaseUrl) {
-    log(options.job, "Application DB URL from Connect / DATABASE_URL");
+    log(
+      options.job,
+      "Application DB URL from Connect / DATABASE_URL (Secrets Manager)",
+    );
   } else {
     log(
       options.job,
       "No application DB URL yet — Lambda will load it from memstream_connections",
     );
   }
+
+  const secret = await upsertDeployConfigSecret({
+    stackName,
+    region,
+    values: {
+      DATABASE_URL: rewriteUrlForLambda(databaseUrl || ""),
+      MEMSTREAM_DATABASE_URL: rewriteUrlForLambda(memstreamUrl),
+      MEMSTREAM_SECRETS_KEY: process.env.MEMSTREAM_SECRETS_KEY || "",
+    },
+  });
+  log(options.job, `Deploy config secret ${secret.name}`);
 
   const prebuiltZip = resolvePrebuiltLambdaZip(options.root);
   let zipPath: string;
@@ -367,7 +378,7 @@ export async function deployLambdaStack(
 
   const cfn = new CloudFormationClient({ region });
   const templateBody = readFileSync(templatePath, "utf-8");
-  const parameters = stackParameters(resolved, deployKey);
+  const parameters = stackParameters(resolved, deployKey, secret.arn);
   const status = await currentStackStatus(cfn, stackName);
 
   if (!status || status === "DELETE_COMPLETE") {

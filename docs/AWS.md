@@ -15,17 +15,16 @@ Video / MCP ask: [DEMO_SCRIPT.md](DEMO_SCRIPT.md). Overview: [README](../README.
 2. MFA on root. Create IAM user `memstream-dev` (not root for daily work).
 3. Attach `AmazonS3FullAccess` + `AmazonBedrockFullAccess` (or tighter S3 + `bedrock:InvokeModel`).
 4. Create CLI access key. Copy the secret once.
-5. If `make deploy-aws` is denied, render a bucket-scoped deployer policy and attach it:
+5. If `make deploy-aws` is denied, attach the deployer **customer managed** policy (do not use inline `put-user-policy` — that cap is 2048 bytes total; this doc is larger):
 
 ```bash
 # needs CDC_S3_BUCKET in .env
-bash scripts/render-deployer-policy.sh
-aws iam put-user-policy --user-name memstream-dev \
-  --policy-name memstream-deployer \
-  --policy-document file://infra/deployer-policy.json
+MEMSTREAM_ATTACH_DEPLOYER_POLICY=1 bash scripts/render-deployer-policy.sh
 ```
 
-Template: `infra/deployer-policy.json.template` (S3 limited to `${CDC_S3_BUCKET}`).
+Or render only (`bash scripts/render-deployer-policy.sh`) and follow the printed `create-policy` / `attach-user-policy` commands. Template: `infra/deployer-policy.json.template` (S3 scoped to `${CDC_S3_BUCKET}`).
+
+**Secrets:** deploy stores DB URLs / AES key in Secrets Manager (`memstream/<stack>/config`). CloudFormation only gets `ConfigSecretArn`. Re-run attach after pulling if Secrets Manager permissions were added.
 ### 2. CLI
 
 ```bash

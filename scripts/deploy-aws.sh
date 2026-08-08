@@ -134,15 +134,37 @@ echo "Packaging prebuilt artifact → s3://${CDC_S3_BUCKET}/${DEPLOY_KEY}"
 TARBALL="$(bash "$ROOT/scripts/package-prebuilt.sh")"
 aws s3 cp "$TARBALL" "s3://${CDC_S3_BUCKET}/${DEPLOY_KEY}" --region "$AWS_REGION"
 
+echo "Upserting deploy config secret (Secrets Manager)…"
+npm run build -w @memstream/engine --silent
+export STACK_NAME
+CONFIG_SECRET_ARN="$(
+  node --input-type=module <<'NODE'
+import { upsertDeployConfigSecret } from "./packages/engine/dist/deploy-secrets.js";
+const out = await upsertDeployConfigSecret({
+  stackName: process.env.STACK_NAME || "memstream-demo",
+  region: process.env.AWS_REGION || "us-east-1",
+  values: {
+    DATABASE_URL: process.env.DATABASE_URL || "",
+    MEMSTREAM_DATABASE_URL: process.env.MEMSTREAM_DATABASE_URL || "",
+    MEMSTREAM_SECRETS_KEY: process.env.MEMSTREAM_SECRETS_KEY || "",
+  },
+});
+process.stdout.write(out.arn);
+NODE
+)"
+export CONFIG_SECRET_ARN
+echo "Secret ARN set (value not printed)"
+
 python3 - <<PY >"$PARAMS_FILE"
 import json, os
 params = [
   {"ParameterKey": "CdcS3Bucket", "ParameterValue": os.environ["CDC_S3_BUCKET"]},
   {"ParameterKey": "CdcS3Prefix", "ParameterValue": os.environ.get("CDC_S3_PREFIX", "cdc/")},
   {"ParameterKey": "DeployObjectKey", "ParameterValue": os.environ.get("DEPLOY_OBJECT_KEY", "deploy/memstream-prebuilt.tgz")},
-  {"ParameterKey": "DatabaseUrl", "ParameterValue": os.environ.get("DATABASE_URL", "")},
-  {"ParameterKey": "MemstreamDatabaseUrl", "ParameterValue": os.environ.get("MEMSTREAM_DATABASE_URL", "")},
-  {"ParameterKey": "MemstreamSecretsKey", "ParameterValue": os.environ.get("MEMSTREAM_SECRETS_KEY", "")},
+  {"ParameterKey": "ConfigSecretArn", "ParameterValue": os.environ["CONFIG_SECRET_ARN"]},
+  {"ParameterKey": "DatabaseUrl", "ParameterValue": ""},
+  {"ParameterKey": "MemstreamDatabaseUrl", "ParameterValue": ""},
+  {"ParameterKey": "MemstreamSecretsKey", "ParameterValue": ""},
   {"ParameterKey": "MemstreamWorkerCompute", "ParameterValue": "lambda" if os.environ.get("MEMSTREAM_WORKER_COMPUTE", "").strip().lower() == "lambda" else "ec2"},
   {"ParameterKey": "BedrockEmbedModel", "ParameterValue": os.environ.get("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0")},
   {"ParameterKey": "MemoryProfile", "ParameterValue": os.environ.get("MEMORY_PROFILE", "commerce")},

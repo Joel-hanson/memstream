@@ -36,6 +36,15 @@ let runtimePromise: Promise<Runtime> | null = null;
 async function getRuntime(): Promise<Runtime> {
   if (!runtimePromise) {
     runtimePromise = (async () => {
+      const { applyDeployConfigSecretFromEnv } = await import(
+        "./deploy-secrets.js"
+      );
+      await applyDeployConfigSecretFromEnv(
+        process.env.AWS_REGION || "us-east-1",
+      ).catch(() => {
+        /* secret optional when DATABASE_URL already set */
+      });
+
       const profileRef =
         process.env.MEMORY_PROFILE?.trim() || "commerce";
       const root = process.env.LAMBDA_TASK_ROOT || process.cwd();

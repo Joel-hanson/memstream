@@ -115,6 +115,18 @@
         "arn:aws:s3:::${CDC_S3_BUCKET}",
         "arn:aws:s3:::${CDC_S3_BUCKET}/*"
       ]
+    },
+    {
+      "Sid": "MemstreamDeploySecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:memstream/*"
     }
   ]
 }

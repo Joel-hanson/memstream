@@ -30,6 +30,53 @@ import { cn, formatRelativeTime } from "@/lib/utils";
 import { runProfileLabel, runStatusLabel } from "./helpers";
 import type { BusyAction } from "./types";
 
+function healthBadgeVariant(
+  status: string | undefined,
+): "secondary" | "destructive" | "outline" {
+  if (status === "ok") return "secondary";
+  if (status === "down" || status === "error" || status === "warn") {
+    return "destructive";
+  }
+  return "outline";
+}
+
+function healthLabel(status: string | undefined): string {
+  switch (status) {
+    case "ok":
+      return "Healthy";
+    case "degraded":
+      return "Degraded";
+    case "down":
+      return "Down";
+    default:
+      return "Unknown";
+  }
+}
+
+function checkLabel(status: string | undefined, kind: "db" | "cf" | "mem"): string {
+  switch (status) {
+    case "ok":
+      return "Ready";
+    case "warn":
+      return kind === "mem" ? "Lagging" : "Warn";
+    case "error":
+      return "Error";
+    case "idle":
+      return "Idle";
+    default:
+      return "Unknown";
+  }
+}
+
+function formatLag(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}h ${mins % 60}m`;
+}
+
 type FlowNode = {
   id?: string;
   label: string;
@@ -273,6 +320,76 @@ export function LivePanel({
           ) : null}
         </div>
       </div>
+
+      {pipeline ? (
+        <Card size="sm">
+          <CardHeader className="flex-row items-start justify-between gap-2">
+            <div className="min-w-0 space-y-1">
+              <CardTitle className="text-sm">Connection health</CardTitle>
+              <CardDescription>
+                {pipeline.health?.connection.detail ||
+                  (pipeline.db_error
+                    ? pipeline.db_error
+                    : "From the latest pipeline refresh")}
+              </CardDescription>
+            </div>
+            <Badge variant={healthBadgeVariant(pipeline.health?.status)}>
+              {healthLabel(pipeline.health?.status)}
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            <ul className="grid gap-2 text-xs sm:grid-cols-3">
+              {[
+                {
+                  key: "db" as const,
+                  label: "App DB",
+                  status: pipeline.health?.connection.status,
+                  detail: pipeline.health?.connection.detail,
+                },
+                {
+                  key: "cf" as const,
+                  label: "Changefeed",
+                  status: pipeline.health?.changefeed.status,
+                  detail: pipeline.health?.changefeed.detail,
+                },
+                {
+                  key: "mem" as const,
+                  label: "Memory lag",
+                  status: pipeline.health?.memory.status,
+                  detail: (() => {
+                    const lag = formatLag(
+                      pipeline.health?.memory.lag_seconds ??
+                        metrics?.lag_seconds,
+                    );
+                    const base =
+                      pipeline.health?.memory.detail ||
+                      "Waiting for pipeline data";
+                    return lag ? `${base} · ${lag}` : base;
+                  })(),
+                },
+              ].map((row) => (
+                <li
+                  key={row.key}
+                  className="min-w-0 border border-border/80 bg-muted/20 px-2.5 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">{row.label}</span>
+                    <Badge
+                      variant={healthBadgeVariant(row.status)}
+                      className="shrink-0"
+                    >
+                      {checkLabel(row.status, row.key)}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate text-foreground/90">
+                    {row.detail || "—"}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-2">

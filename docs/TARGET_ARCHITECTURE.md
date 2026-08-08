@@ -93,9 +93,9 @@ Same monorepo; two deployment modes.
 | --- | --- |
 | Single operator, `.env` platform DB | Orgs + workspaces on platform DB |
 | In-memory `JobStore` + `memstream_runs` | **Runs DB is source of truth**; job store is cache |
-| `session.env` bridge for workers | Prefer platform connection + env injection; retire file as source of truth |
+| `session.env` bridge for workers | Prefer platform connection + Secrets Manager; retire file as source of truth |
 | EC2 default for cloud enable | SaaS: managed Lambda; self-host: EC2 optional |
-| Secrets via env / CFN params | Secrets Manager / SSM (SaaS); documented self-host path |
+| Secrets via env / CFN params | **Secrets Manager** (`memstream/<stack>/config`); CFN only gets ARN |
 | Monolithic `console-app.tsx` | Feature modules: Connect / Configure / Enable / Live / Runs |
 
 Engine ports (`EventSource`, `Embedder`, `MemoryStore`) stay. Package layout stays:
@@ -119,7 +119,7 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 1. ✅ Split console by feature (Connect / Configure / Enable / Live / Runs) + thin page shell  
 2. ✅ Typed API client + shared error/`Result` type  
 3. ✅ Workspace primitive (`connection_id` = workspace id, nullable `org_id`) + durable enable jobs  
-4. Secrets out of CloudFormation parameters  
+4. ✅ Secrets out of CloudFormation parameters (Secrets Manager)  
 
 ### Track B — Features (ship on seams)
 
@@ -128,7 +128,7 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 | Thin orgs + invite | SaaS entry |
 | Managed worker as first-class Enable path | Less AWS homework |
 | Self-host runbook (same packages) | Optional path |
-| Connection health + memory lag on Live | Trust |
+| ✅ Connection health + memory lag on Live | Trust |
 | Profile versioning | Real rule edits |
 
 ### Suggested 6-week shape
@@ -161,4 +161,8 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 **Track A.3** — ✅ Workspace primitive (`connection_id` = workspace id, nullable `org_id`) + durable enable progress (`steps_json` on `memstream_runs`, `bindJobToRun`).
 
-**Track A.4** — Secrets out of CloudFormation parameters (next).
+**Track A.4** — ✅ Deploy secrets via AWS Secrets Manager (`ConfigSecretArn`); CFN params for DB URLs / AES key left empty.
+
+**Track B** — Product features (orgs, managed worker polish, self-host runbook, …).
+
+**Track B.1** — ✅ Connection health + memory lag on Live (`pipeline.health` from `/api/pipeline`; App DB / changefeed / lag vs newest CDC object).
