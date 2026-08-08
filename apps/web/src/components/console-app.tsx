@@ -326,10 +326,23 @@ export function ConsoleApp() {
           }
           return;
         }
-        staleTicks = 0;
         const data = result.value;
         setJob(data);
         if (data.result?.run_id) setActiveRunId(String(data.result.run_id));
+
+        // Durable run without live worker — server restarted mid-enable.
+        if (
+          data.live === false &&
+          (data.status === "running" || data.status === "queued")
+        ) {
+          staleTicks += 1;
+          if (staleTicks >= 8) {
+            await markInterrupted(data);
+          }
+          return;
+        }
+
+        staleTicks = 0;
         void refreshPipeline();
 
         if (data.status === "succeeded" || data.status === "failed") {

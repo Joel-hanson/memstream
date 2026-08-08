@@ -18,10 +18,15 @@ CREATE TABLE IF NOT EXISTS memstream_connections (
   region STRING,
   prefix STRING,
   is_active BOOL NOT NULL DEFAULT true,
+  -- SaaS org (nullable until auth); connection id is the workspace id
+  org_id STRING,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   INDEX memstream_connections_active_idx (is_active)
 );
+
+-- Safe for clusters created before org_id existed
+ALTER TABLE memstream_connections ADD COLUMN IF NOT EXISTS org_id STRING;
 
 CREATE TABLE IF NOT EXISTS memstream_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -35,16 +40,21 @@ CREATE TABLE IF NOT EXISTS memstream_runs (
   shop_url STRING,
   job_id STRING,
   app_database_label STRING,
+  -- Workspace id (= memstream_connections.id)
   connection_id UUID,
   log STRING[] NOT NULL DEFAULT ARRAY[],
+  -- JSON array of enable JobStep objects (durable progress)
+  steps_json STRING,
   error STRING,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ,
-  INDEX memstream_runs_created_idx (created_at DESC)
+  INDEX memstream_runs_created_idx (created_at DESC),
+  INDEX memstream_runs_job_idx (job_id)
 );
 
--- Safe for clusters created before connection_id existed
+-- Safe for clusters created before connection_id / steps_json existed
 ALTER TABLE memstream_runs ADD COLUMN IF NOT EXISTS connection_id UUID;
+ALTER TABLE memstream_runs ADD COLUMN IF NOT EXISTS steps_json STRING;
 
 CREATE TABLE IF NOT EXISTS memstream_cdc_keys (
   scope_id STRING NOT NULL,

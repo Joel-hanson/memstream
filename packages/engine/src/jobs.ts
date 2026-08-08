@@ -1,6 +1,9 @@
-/** In-memory background jobs for the Memstream console. */
+/** In-memory background jobs for the Memstream console.
+ * When bound to a platform run, progress is mirrored so restarts can hydrate.
+ */
 
 import { randomBytes } from "node:crypto";
+import type { MemstreamRunStep } from "./runs.js";
 
 export type JobStepStatus =
   | "pending"
@@ -26,12 +29,67 @@ export interface Job {
   error: string | null;
   startedAt: number | null;
   finishedAt: number | null;
+  /** Platform run id when progress is durable. */
+  runId: string | null;
   append: (line: string) => void;
   setSteps: (steps: JobStep[]) => void;
   setStep: (
     id: string,
     patch: Partial<Pick<JobStep, "status" | "detail" | "label">>,
   ) => void;
+}
+
+export type PersistJobProgress = (snapshot: {
+  runId: string;
+  log: string[];
+  steps: MemstreamRunStep[];
+  status: Job["status"];
+}) => Promise<void>;
+
+/** Mirror append / step updates onto the platform run (debounced). */
+export function bindJobToRun(
+  job: Job,
+  runId: string,
+  persist: PersistJobProgress,
+): void {
+  job.runId = runId;
+  let chain: Promise<void> = Promise.resolve();
+  let scheduled = false;
+
+  const flush = () => {
+    if (scheduled) return;
+    scheduled = true;
+    chain = chain
+      .then(async () => {
+        scheduled = false;
+        await persist({
+          runId,
+          log: [...job.log],
+          steps: job.steps.map((s) => ({ ...s })),
+          status: job.status,
+        });
+      })
+      .catch(() => {
+        scheduled = false;
+      });
+  };
+
+  const originalAppend = job.append.bind(job);
+  const originalSetSteps = job.setSteps.bind(job);
+  const originalSetStep = job.setStep.bind(job);
+
+  job.append = (line: string) => {
+    originalAppend(line);
+    flush();
+  };
+  job.setSteps = (steps: JobStep[]) => {
+    originalSetSteps(steps);
+    flush();
+  };
+  job.setStep = (id, patch) => {
+    originalSetStep(id, patch);
+    flush();
+  };
 }
 
 export class JobStore {
@@ -48,6 +106,7 @@ export class JobStore {
       error: null,
       startedAt: null,
       finishedAt: null,
+      runId: null,
       append(line: string) {
         this.log.push(line);
       },
@@ -97,7 +156,7 @@ export class JobStore {
 }
 
 /** Bump when Job shape / create() methods change so Next HMR does not keep a stale singleton. */
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 const globalKey = "__memstreamJobStore";
 const versionKey = "__memstreamJobStoreVersion";
 

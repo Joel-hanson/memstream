@@ -34,6 +34,7 @@ export type RunsListResponse = {
 
 export type PublicConnection = {
   id: string;
+  workspace_id?: string;
   name?: string;
   has_url?: boolean;
   database_url_hint?: string;
@@ -41,6 +42,7 @@ export type PublicConnection = {
   bucket?: string | null;
   region?: string | null;
   prefix?: string | null;
+  org_id?: string | null;
   is_active?: boolean;
   updated_at?: string | null;
 };

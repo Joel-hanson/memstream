@@ -20,6 +20,7 @@ import {
 import { deployLambdaStack } from "./deploy-lambda.js";
 import { fetchPublicTables, proposeProfileDict } from "./discover.js";
 import type { Job } from "./jobs.js";
+import { bindJobToRun } from "./jobs.js";
 import {
   buildEnableSteps,
   PIPELINE_LABELS,
@@ -32,7 +33,7 @@ import {
   getRun,
   listRuns,
   memstreamDatabaseUrl,
-  updateRunLog,
+  updateRunProgress,
 } from "./runs.js";
 import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
 import { getConnection, upsertConnection } from "./connections.js";
@@ -638,18 +639,6 @@ export async function runEnablePipeline(
   };
 
   let runId: string | null = null;
-  let appendCount = 0;
-  const originalAppend = job.append.bind(job);
-  job.append = (line: string) => {
-    originalAppend(line);
-    appendCount += 1;
-    if (runId && appendCount % 5 === 0) {
-      void updateRunLog(runId, [...job.log], root).catch(() => {
-        /* non-fatal */
-      });
-    }
-  };
-
   try {
     let connectionId: string | null = null;
     try {
@@ -662,11 +651,11 @@ export async function runEnablePipeline(
       });
       connectionId = conn.id;
       job.append(
-        `Stored application connection ${conn.database_label || conn.id} (encrypted)`,
+        `Workspace ${conn.database_label || conn.id} (encrypted connection)`,
       );
     } catch (err) {
       job.append(
-        `Could not persist connection to Memstream DB: ${
+        `Could not persist workspace connection to Memstream DB: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -686,14 +675,25 @@ export async function runEnablePipeline(
     });
     runId = run?.id ?? null;
     if (runId) {
-      job.append(`Memstream run ${runId} (platform DB)`);
+      bindJobToRun(job, runId, async (snapshot) => {
+        await updateRunProgress(
+          snapshot.runId,
+          {
+            log: snapshot.log,
+            steps: snapshot.steps,
+            status: snapshot.status,
+          },
+          root,
+        );
+      });
+      job.append(`Memstream run ${runId} (platform DB — durable)`);
     } else {
       job.append(
         "MEMSTREAM_DATABASE_URL unset — enable continues without run history",
       );
     }
 
-    // Local worker bridge only — source of truth is memstream_connections.
+    // Local worker bridge only — source of truth is memstream_connections (workspace).
     const envPath = writeSessionEnv(values, root);
     job.append(`Wrote local worker env → ${envPath}`);
 
@@ -853,6 +853,7 @@ export async function runEnablePipeline(
       await finishRun(runId, {
         status: "succeeded",
         log: [...job.log],
+        steps: job.steps.map((s) => ({ ...s })),
         shopUrl: payload.shop_url,
         root,
       });
@@ -865,6 +866,7 @@ export async function runEnablePipeline(
       await finishRun(runId, {
         status: "failed",
         log: [...job.log, `ERROR: ${message}`],
+        steps: job.steps.map((s) => ({ ...s })),
         error: message,
         root,
       }).catch(() => {
@@ -872,8 +874,6 @@ export async function runEnablePipeline(
       });
     }
     throw err;
-  } finally {
-    job.append = originalAppend;
   }
 }
 

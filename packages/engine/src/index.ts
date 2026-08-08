@@ -137,11 +137,14 @@ export {
   getRunByJobId,
   deleteRun,
   listRuns,
+  jobSnapshotFromRun,
   memstreamDatabaseUrl,
   updateRunLog,
+  updateRunProgress,
   type CreateRunInput,
   type MemstreamRun,
   type MemstreamRunStatus,
+  type MemstreamRunStep,
 } from "./runs.js";
 export {
   getActiveConnection,
@@ -149,7 +152,12 @@ export {
   listConnections,
   resolveAppDatabaseUrl,
   upsertConnection,
+  getWorkspace,
+  listWorkspaces,
+  upsertWorkspace,
+  getActiveWorkspace,
   type MemstreamConnection,
+  type MemstreamWorkspace,
   type UpsertConnectionInput,
 } from "./connections.js";
 export {
@@ -199,9 +207,11 @@ export {
 export {
   getJobStore,
   JobStore,
+  bindJobToRun,
   type Job,
   type JobStep,
   type JobStepStatus,
+  type PersistJobProgress,
 } from "./jobs.js";
 export {
   CockroachShop,

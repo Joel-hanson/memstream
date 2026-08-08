@@ -118,9 +118,8 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 1. ✅ Split console by feature (Connect / Configure / Enable / Live / Runs) + thin page shell  
 2. ✅ Typed API client + shared error/`Result` type  
-3. Promote `connection_id` → workspace (+ `org_id` when auth lands)  
-4. Durable enable jobs — platform runs are canonical  
-5. Secrets out of CloudFormation parameters  
+3. ✅ Workspace primitive (`connection_id` = workspace id, nullable `org_id`) + durable enable jobs  
+4. Secrets out of CloudFormation parameters  
 
 ### Track B — Features (ship on seams)
 
@@ -160,4 +159,6 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 **Track A.2** — ✅ Typed API client (`lib/api-client.ts`) + `Result`/`ApiError` (`lib/result.ts`); console orchestrator uses `consoleApi`.
 
-**Track A.3** — Promote `connection_id` → workspace (+ `org_id` when auth lands); durable enable jobs (platform runs canonical).
+**Track A.3** — ✅ Workspace primitive (`connection_id` = workspace id, nullable `org_id`) + durable enable progress (`steps_json` on `memstream_runs`, `bindJobToRun`).
+
+**Track A.4** — Secrets out of CloudFormation parameters (next).

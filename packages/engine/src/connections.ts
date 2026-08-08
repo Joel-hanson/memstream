@@ -12,6 +12,8 @@ import { sanitizeDatabaseUrlForStorage } from "./store-cockroach.js";
 
 export type MemstreamConnection = {
   id: string;
+  /** Product alias: workspace id === connection id. */
+  workspace_id: string;
   name: string;
   database_url: string;
   database_label: string | null;
@@ -19,9 +21,14 @@ export type MemstreamConnection = {
   region: string | null;
   prefix: string | null;
   is_active: boolean;
+  /** SaaS org — null until auth lands. */
+  org_id: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
+
+/** Product name for an application connection (customer data plane pointer). */
+export type MemstreamWorkspace = MemstreamConnection;
 
 export type UpsertConnectionInput = {
   databaseUrl: string;
@@ -31,6 +38,7 @@ export type UpsertConnectionInput = {
   name?: string;
   /** When set, update this row; otherwise upsert the active connection. */
   id?: string;
+  orgId?: string | null;
   root?: string;
 };
 
@@ -53,6 +61,7 @@ function rowToConnection(
   }
   return {
     id: String(row.id),
+    workspace_id: String(row.id),
     name: String(row.name ?? "default"),
     database_url: databaseUrl,
     database_label:
@@ -61,6 +70,7 @@ function rowToConnection(
     region: row.region != null ? String(row.region) : null,
     prefix: row.prefix != null ? String(row.prefix) : null,
     is_active: Boolean(row.is_active),
+    org_id: row.org_id != null ? String(row.org_id) : null,
     created_at: row.created_at != null ? String(row.created_at) : null,
     updated_at: row.updated_at != null ? String(row.updated_at) : null,
   };
@@ -68,7 +78,7 @@ function rowToConnection(
 
 const SELECT_COLS = `
   id::text, name, database_url_ciphertext, database_label,
-  bucket, region, prefix, is_active,
+  bucket, region, prefix, is_active, org_id,
   created_at::text, updated_at::text
 `;
 
@@ -146,7 +156,7 @@ export async function listConnections(
       `
       SELECT
         id::text, name, database_label, bucket, region, prefix, is_active,
-        created_at::text, updated_at::text
+        org_id, created_at::text, updated_at::text
       FROM memstream_connections
       ORDER BY updated_at DESC
       LIMIT 50
@@ -154,6 +164,7 @@ export async function listConnections(
     );
     return result.rows.map((row) => ({
       id: String(row.id),
+      workspace_id: String(row.id),
       name: String(row.name ?? "default"),
       database_label:
         row.database_label != null ? String(row.database_label) : null,
@@ -161,6 +172,7 @@ export async function listConnections(
       region: row.region != null ? String(row.region) : null,
       prefix: row.prefix != null ? String(row.prefix) : null,
       is_active: Boolean(row.is_active),
+      org_id: row.org_id != null ? String(row.org_id) : null,
       created_at: row.created_at != null ? String(row.created_at) : null,
       updated_at: row.updated_at != null ? String(row.updated_at) : null,
     }));
@@ -190,6 +202,7 @@ export async function upsertConnection(
   const bucket = input.bucket?.trim() || null;
   const region = input.region?.trim() || null;
   const prefix = input.prefix?.trim() || null;
+  const orgId = input.orgId?.trim() || null;
 
   return withClientObjects(url, async (client) => {
     await client.query(
@@ -206,29 +219,36 @@ export async function upsertConnection(
           bucket = $5,
           region = $6,
           prefix = $7,
+          org_id = COALESCE($8, org_id),
           is_active = true,
           updated_at = now()
         WHERE id = $1::uuid
         RETURNING ${SELECT_COLS}
         `,
-        [input.id, name, ciphertext, label, bucket, region, prefix],
+        [input.id, name, ciphertext, label, bucket, region, prefix, orgId],
       );
       if (updated.rows.length) {
         return rowToConnection(updated.rows[0]!, root);
       }
     }
 
-    // New Memstream / first Connect — always insert a new connection row.
+    // New Memstream / first Connect — always insert a new connection row (workspace).
     const inserted = await client.query(
       `
       INSERT INTO memstream_connections (
         name, database_url_ciphertext, database_label,
-        bucket, region, prefix, is_active
-      ) VALUES ($1, $2, $3, $4, $5, $6, true)
+        bucket, region, prefix, org_id, is_active
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, true)
       RETURNING ${SELECT_COLS}
       `,
-      [name, ciphertext, label, bucket, region, prefix],
+      [name, ciphertext, label, bucket, region, prefix, orgId],
     );
     return rowToConnection(inserted.rows[0]!, root);
   });
 }
+
+/** Workspace helpers — same rows as connections; id is the workspace id. */
+export const getWorkspace = getConnection;
+export const listWorkspaces = listConnections;
+export const upsertWorkspace = upsertConnection;
+export const getActiveWorkspace = getActiveConnection;

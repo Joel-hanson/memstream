@@ -25,7 +25,7 @@ export function jobFromRun(run: MemstreamRun): JobStatus {
     kind: "enable",
     status: run.status,
     log: run.log || [],
-    steps: [],
+    steps: run.steps || [],
     result: {
       ...(run.shop_url ? { shop_url: run.shop_url } : {}),
       run_id: run.id,

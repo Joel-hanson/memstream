@@ -110,8 +110,11 @@ export type MemstreamRun = {
   shop_url: string | null;
   job_id: string | null;
   app_database_label: string | null;
+  /** Workspace id (= connection id). */
   connection_id?: string | null;
+  workspace_id?: string | null;
   log: string[];
+  steps?: JobStep[];
   error: string | null;
   created_at: string | null;
   finished_at: string | null;

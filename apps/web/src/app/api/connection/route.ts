@@ -18,11 +18,13 @@ function publicConnection(connection: {
   bucket: string | null;
   region: string | null;
   prefix: string | null;
+  org_id?: string | null;
   is_active: boolean;
   updated_at: string | null;
 }) {
   return {
     id: connection.id,
+    workspace_id: connection.id,
     name: connection.name,
     has_url: Boolean(connection.database_url),
     database_url_hint: connection.database_url
@@ -32,6 +34,7 @@ function publicConnection(connection: {
     bucket: connection.bucket,
     region: connection.region,
     prefix: connection.prefix,
+    org_id: connection.org_id,
     is_active: connection.is_active,
     updated_at: connection.updated_at,
   };

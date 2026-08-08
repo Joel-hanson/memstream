@@ -11,6 +11,13 @@ export type MemstreamRunStatus =
   | "succeeded"
   | "failed";
 
+export type MemstreamRunStep = {
+  id: string;
+  label: string;
+  detail: string;
+  status: string;
+};
+
 export type MemstreamRun = {
   id: string;
   status: MemstreamRunStatus;
@@ -23,8 +30,12 @@ export type MemstreamRun = {
   shop_url: string | null;
   job_id: string | null;
   app_database_label: string | null;
+  /** Workspace id (= memstream_connections.id). */
   connection_id: string | null;
+  /** Alias of connection_id for product language. */
+  workspace_id: string | null;
   log: string[];
+  steps: MemstreamRunStep[];
   error: string | null;
   created_at: string | null;
   finished_at: string | null;
@@ -170,8 +181,33 @@ export async function ensureMemstreamSchema(
   return true;
 }
 
+function parseStepsJson(raw: unknown): MemstreamRunStep[] {
+  if (raw == null || raw === "") return [];
+  try {
+    const parsed =
+      typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((s) => {
+      const row = (s && typeof s === "object" ? s : {}) as Record<
+        string,
+        unknown
+      >;
+      return {
+        id: String(row.id ?? ""),
+        label: String(row.label ?? ""),
+        detail: String(row.detail ?? ""),
+        status: String(row.status ?? "pending"),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 function rowToRun(row: Record<string, unknown>): MemstreamRun {
   const log = row.log;
+  const connectionId =
+    row.connection_id != null ? String(row.connection_id) : null;
   return {
     id: String(row.id),
     status: String(row.status) as MemstreamRunStatus,
@@ -185,9 +221,10 @@ function rowToRun(row: Record<string, unknown>): MemstreamRun {
     job_id: row.job_id != null ? String(row.job_id) : null,
     app_database_label:
       row.app_database_label != null ? String(row.app_database_label) : null,
-    connection_id:
-      row.connection_id != null ? String(row.connection_id) : null,
+    connection_id: connectionId,
+    workspace_id: connectionId,
     log: Array.isArray(log) ? log.map(String) : [],
+    steps: parseStepsJson(row.steps_json),
     error: row.error != null ? String(row.error) : null,
     created_at: row.created_at != null ? String(row.created_at) : null,
     finished_at: row.finished_at != null ? String(row.finished_at) : null,
@@ -197,8 +234,34 @@ function rowToRun(row: Record<string, unknown>): MemstreamRun {
 const RUN_SELECT = `
   id::text, status, profile_path, tables, bucket, region, prefix,
   stack_name, shop_url, job_id, app_database_label, connection_id::text,
-  log, error, created_at::text, finished_at::text
+  log, steps_json, error, created_at::text, finished_at::text
 `;
+
+/** Hydrate a console JobStatus-shaped payload from a persisted run. */
+export function jobSnapshotFromRun(run: MemstreamRun): {
+  id: string;
+  kind: string;
+  status: string;
+  log: string[];
+  steps: MemstreamRunStep[];
+  result: { shop_url?: string; run_id: string } | null;
+  error: string | null;
+  live: false;
+} {
+  return {
+    id: run.job_id || run.id,
+    kind: "enable",
+    status: run.status,
+    log: run.log || [],
+    steps: run.steps || [],
+    result: {
+      ...(run.shop_url ? { shop_url: run.shop_url } : {}),
+      run_id: run.id,
+    },
+    error: run.error,
+    live: false,
+  };
+}
 
 /** Returns null if Memstream DB is not configured. */
 export async function createRun(
@@ -243,14 +306,35 @@ export async function updateRunLog(
   log: string[],
   root = findRepoRoot(),
 ): Promise<void> {
+  await updateRunProgress(runId, { log }, root);
+}
+
+/** Persist enable progress — platform runs are the durable source of truth. */
+export async function updateRunProgress(
+  runId: string,
+  patch: {
+    log?: string[];
+    steps?: MemstreamRunStep[];
+    status?: MemstreamRunStatus;
+  },
+  root = findRepoRoot(),
+): Promise<void> {
   const url = memstreamDatabaseUrl(root);
   if (!url) return;
   await ensureMemstreamSchema(root);
+  const stepsJson =
+    patch.steps !== undefined ? JSON.stringify(patch.steps) : null;
   await withClientObjects(url, async (client) => {
-    await client.query(`UPDATE memstream_runs SET log = $2 WHERE id = $1::uuid`, [
-      runId,
-      log,
-    ]);
+    await client.query(
+      `
+      UPDATE memstream_runs SET
+        log = COALESCE($2, log),
+        steps_json = COALESCE($3, steps_json),
+        status = COALESCE($4, status)
+      WHERE id = $1::uuid
+      `,
+      [runId, patch.log ?? null, stepsJson, patch.status ?? null],
+    );
   });
 }
 
@@ -259,6 +343,7 @@ export async function finishRun(
   options: {
     status: "succeeded" | "failed";
     log?: string[];
+    steps?: MemstreamRunStep[];
     shopUrl?: string | null;
     error?: string | null;
     root?: string;
@@ -268,14 +353,17 @@ export async function finishRun(
   const url = memstreamDatabaseUrl(root);
   if (!url) return;
   await ensureMemstreamSchema(root);
+  const stepsJson =
+    options.steps !== undefined ? JSON.stringify(options.steps) : null;
   await withClientObjects(url, async (client) => {
     await client.query(
       `
       UPDATE memstream_runs SET
         status = $2,
         log = COALESCE($3, log),
-        shop_url = COALESCE($4, shop_url),
-        error = $5,
+        steps_json = COALESCE($4, steps_json),
+        shop_url = COALESCE($5, shop_url),
+        error = $6,
         finished_at = now()
       WHERE id = $1::uuid
       `,
@@ -283,6 +371,7 @@ export async function finishRun(
         runId,
         options.status,
         options.log ?? null,
+        stepsJson,
         options.shopUrl ?? null,
         options.error ?? null,
       ],
