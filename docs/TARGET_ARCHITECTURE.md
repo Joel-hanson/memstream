@@ -14,7 +14,7 @@ Hackathon notes remain in [PLAN.md](../PLAN.md). Review dump: [ARCHITECTURE_REVI
 ### Explicit non-goals (unchanged)
 
 - Putting `agent_memory_chunks` in the Memstream platform DB
-- Replacing MCP ask with a hosted chat UI
+- Replacing MCP ask with a hosted chat UI as the **product** surface (a thin demo Support chat on `/shop` is fine; Cursor + MCP remains the agent proof)
 - Full multi-region control plane in v1
 - Merging platform + application into one URL as the product model
 
@@ -85,6 +85,8 @@ Same monorepo; two deployment modes.
 
 **EC2** stays the demo / self-host “box.” It is not the default multi-tenant SaaS worker.
 
+Operator guide: [SELF_HOST.md](./SELF_HOST.md).
+
 ---
 
 ## Current → target (honest map)
@@ -92,11 +94,13 @@ Same monorepo; two deployment modes.
 | Today (hackathon slice) | Target |
 | --- | --- |
 | Single operator, `.env` platform DB | Orgs + workspaces on platform DB |
-| In-memory `JobStore` + `memstream_runs` | **Runs DB is source of truth**; job store is cache |
-| `session.env` bridge for workers | Prefer platform connection + Secrets Manager; retire file as source of truth |
+| In-memory `JobStore` + `memstream_runs` | **Done** — runs DB SoT; `PlatformState.getJob` + JobStore cache |
+| `session.env` bridge for workers | **Retired** — connections + Secrets Manager; file no longer written |
 | EC2 default for cloud enable | SaaS: managed Lambda; self-host: EC2 optional |
 | Secrets via env / CFN params | **Secrets Manager** (`memstream/<stack>/config`); CFN only gets ARN |
-| Monolithic `console-app.tsx` | Feature modules: Connect / Configure / Enable / Live / Runs |
+| Monolithic `console-app.tsx` | Feature modules: Connect / Configure / Enable / Live / Runs (orchestrator remains) |
+| One-shot pg clients | **Pooled** `withClient*` via `db.ts` |
+| Missing `/api/health` | **Done** — platform DB + optional S3 |
 
 Engine ports (`EventSource`, `Embedder`, `MemoryStore`) stay. Package layout stays:
 
@@ -105,7 +109,7 @@ apps/web/         control plane UI + APIs (+ demo shop)
 packages/engine/  fabric: CDC, profile, embed, store, enable
 packages/mcp/     search_memory
 sql/              memstream.sql (platform) · application.sql (app + chunks)
-infra/            EC2 (self-host/demo) · Lambda (SaaS/managed worker)
+infra/            CDK (`infra/cdk`) → synth → EC2/Lambda CFN YAML · deployer IAM
 ```
 
 ---
@@ -125,11 +129,11 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 | Feature | Why |
 | --- | --- |
-| Thin orgs + invite | SaaS entry |
+| ✅ Thin orgs + invite | SaaS entry |
 | ✅ Managed worker as first-class Enable path | Less AWS homework |
-| Self-host runbook (same packages) | Optional path |
+| ✅ Self-host runbook (same packages) | Optional path |
 | ✅ Connection health + memory lag on Live | Trust |
-| Profile versioning | Real rule edits |
+| ✅ Profile versioning | Real rule edits |
 
 ### Suggested 6-week shape
 
@@ -149,7 +153,7 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 | Dual DB is premature multi-tenancy | Premature part was missing **org/workspace**, not the split |
 | EC2 as default cloud worker | **Self-host/demo**; SaaS defaults to managed Lambda/queue |
 | Freeze features for refactor | **No** — dual-track |
-| CDK rewrite first | Later, when infra churn hurts; seams first |
+| CDK rewrite first | **Done** — CDK source in `infra/cdk/`; synth writes `infra/*.yaml` for Enable |
 
 ---
 
@@ -163,8 +167,20 @@ Every feature lands in a **new module**, not more lines in `console-app.tsx`.
 
 **Track A.4** — ✅ Deploy secrets via AWS Secrets Manager (`ConfigSecretArn`); CFN params for DB URLs / AES key left empty.
 
-**Track B** — Product features (orgs, managed worker polish, self-host runbook, …).
-
 **Track B.1** — ✅ Connection health + memory lag on Live (`pipeline.health` from `/api/pipeline`; App DB / changefeed / lag vs newest CDC object).
 
 **Track B.2** — ✅ Managed Lambda is the default Enable cloud worker (`resolveWorkerCompute` + Enable UI); EC2 remains self-host/demo under Advanced.
+
+**Track B.3** — ✅ Self-host runbook ([SELF_HOST.md](./SELF_HOST.md)): same packages, your control plane + worker options.
+
+**Track B.4** — ✅ Profile versioning (`memstream_profile_versions`; Configure → Version history → Restore).
+
+**Track B.5** — ✅ Thin orgs + invite (`memstream_orgs` / `memstream_org_invites`; header Org dialog; connections tagged with `org_id`).
+
+**Infra** — ✅ AWS CDK source of truth ([`infra/cdk`](../infra/cdk)); `make synth-infra` writes `infra/ec2.yaml` + `infra/lambda.yaml` for Enable/deploy (ARCHITECTURE_REVIEW Task 3.2). Generated YAML stays committed — do not delete after CDK.
+
+**Hardening** — ✅ DB connection pooling (`closePools` on CLI exit); `GET /api/health`; `PlatformState` (CDC + jobs + connections); `session.env` retired; graceful CLI SIGINT/SIGTERM; domain constants (`RUN_STATUS` / `WORKER_COMPUTE` / …); cockatiel retry/breakers on Bedrock+S3; console API rate limits; zod env validation.
+
+**Backlog** — Zustand console state rewrite; AWS KMS for `MEMSTREAM_SECRETS_KEY`; Task 2.2 observability (pino/metrics/Sentry).
+
+**Track B** — Complete for the locked roadmap slice.

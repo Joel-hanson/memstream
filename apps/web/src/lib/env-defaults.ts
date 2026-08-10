@@ -7,6 +7,7 @@ import {
 } from "@memstream/engine";
 import { webRepoRoot } from "@/lib/api";
 import { maskDatabaseUrl } from "@/lib/connect-url";
+import { getEnv } from "@/lib/env";
 
 export { isUsableDatabaseUrl, maskDatabaseUrl } from "@/lib/connect-url";
 
@@ -61,6 +62,12 @@ function opsPrefill(root: string): {
   worker_compute: "ec2" | "lambda";
 } {
   const fileEnv = parseEnvFile(join(root, ".env"));
+  const validated = getEnv({
+    ...process.env,
+    ...Object.fromEntries(
+      Object.entries(fileEnv).filter(([k]) => !(k in process.env) || !process.env[k]),
+    ),
+  } as NodeJS.ProcessEnv);
   const envVal = (key: string) =>
     process.env[key]?.trim() || fileEnv[key]?.trim() || "";
   const merged: NodeJS.ProcessEnv = {
@@ -68,12 +75,13 @@ function opsPrefill(root: string): {
     MEMSTREAM_WORKER_COMPUTE:
       process.env.MEMSTREAM_WORKER_COMPUTE ||
       fileEnv.MEMSTREAM_WORKER_COMPUTE ||
+      validated.MEMSTREAM_WORKER_COMPUTE ||
       "lambda",
   };
   return {
-    bucket: envVal("CDC_S3_BUCKET"),
-    region: envVal("AWS_REGION") || "us-east-1",
-    prefix: envVal("CDC_S3_PREFIX") || "cdc/",
+    bucket: validated.CDC_S3_BUCKET || envVal("CDC_S3_BUCKET"),
+    region: validated.AWS_REGION || envVal("AWS_REGION") || "us-east-1",
+    prefix: validated.CDC_S3_PREFIX || envVal("CDC_S3_PREFIX") || "cdc/",
     worker_compute: resolveWorkerCompute(merged),
   };
 }

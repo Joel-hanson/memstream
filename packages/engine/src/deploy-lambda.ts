@@ -5,8 +5,6 @@ import {
   CreateStackCommand,
   DescribeStacksCommand,
   UpdateStackCommand,
-  waitUntilStackCreateComplete,
-  waitUntilStackUpdateComplete,
 } from "@aws-sdk/client-cloudformation";
 import {
   LambdaClient,
@@ -41,9 +39,12 @@ import {
 } from "./deploy-aws.js";
 import { resolveAppDatabaseUrl } from "./connections.js";
 import { upsertDeployConfigSecret } from "./deploy-secrets.js";
+import { INFRA_TEMPLATE } from "./constants.js";
+import { infraTemplatePath } from "./infra-templates.js";
 import type { Job } from "./jobs.js";
 import { resolveCaCertPath } from "./ca-cert.js";
 import { stripSslRootCert } from "./store-cockroach.js";
+import { waitForStackSettle } from "./stack-wait.js";
 
 export type DeployLambdaOptions = {
   root: string;
@@ -216,20 +217,7 @@ async function currentStackStatus(
 const NOTIFICATION_ID = "memstream-cdc-lambda";
 
 function resolveLambdaTemplate(root: string): string {
-  const paths = [
-    join(root, "infra", "lambda.yaml"),
-    ...(process.env.MEMSTREAM_ROOT?.trim()
-      ? [join(process.env.MEMSTREAM_ROOT.trim(), "infra", "lambda.yaml")]
-      : []),
-    "/opt/memstream/infra/lambda.yaml",
-  ];
-  const found = paths.find((p) => existsSync(p));
-  if (!found) {
-    throw new Error(
-      `Missing template ${join(root, "infra", "lambda.yaml")} (also checked MEMSTREAM_ROOT / /opt/memstream)`,
-    );
-  }
-  return found;
+  return infraTemplatePath(root, INFRA_TEMPLATE.LAMBDA);
 }
 
 function resolvePrebuiltLambdaZip(root: string): string | null {
@@ -392,10 +380,13 @@ export async function deployLambdaStack(
       }),
     );
     log(options.job, "Waiting for Lambda stack create…");
-    await waitUntilStackCreateComplete(
-      { client: cfn, maxWaitTime: 600 },
-      { StackName: stackName },
-    );
+    await waitForStackSettle({
+      client: cfn,
+      stackName,
+      mode: "create",
+      maxWaitSeconds: 600,
+      job: options.job,
+    });
   } else {
     log(options.job, `Updating stack ${stackName} (status=${status})`);
     try {
@@ -408,10 +399,13 @@ export async function deployLambdaStack(
         }),
       );
       log(options.job, "Waiting for Lambda stack update…");
-      await waitUntilStackUpdateComplete(
-        { client: cfn, maxWaitTime: 600 },
-        { StackName: stackName },
-      );
+      await waitForStackSettle({
+        client: cfn,
+        stackName,
+        mode: "update",
+        maxWaitSeconds: 600,
+        job: options.job,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No updates are to be performed/i.test(msg)) {

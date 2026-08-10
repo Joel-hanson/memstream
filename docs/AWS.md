@@ -3,7 +3,8 @@
 One path: AWS account → Cockroach DBs → Enable changefeed → run the worker.
 
 Cockroach: platform URL in `.env` (`MEMSTREAM_DATABASE_URL`), application URL in Connect.  
-Video / MCP ask: [DEMO_SCRIPT.md](DEMO_SCRIPT.md). Overview: [README](../README.md).
+Video / MCP ask: [DEMO_SCRIPT.md](DEMO_SCRIPT.md). Overview: [README](../README.md).  
+Self-host (same packages, your control plane): [SELF_HOST.md](SELF_HOST.md).
 
 ---
 
@@ -24,7 +25,9 @@ MEMSTREAM_ATTACH_DEPLOYER_POLICY=1 bash scripts/render-deployer-policy.sh
 
 Or render only (`bash scripts/render-deployer-policy.sh`) and follow the printed `create-policy` / `attach-user-policy` commands. Template: `infra/deployer-policy.json.template` (S3 scoped to `${CDC_S3_BUCKET}`).
 
-**Secrets:** deploy stores DB URLs / AES key in Secrets Manager (`memstream/<stack>/config`). CloudFormation only gets `ConfigSecretArn`. Re-run attach after pulling if Secrets Manager permissions were added.
+**Secrets:** deploy stores DB URLs / AES key in Secrets Manager (`memstream/<stack>/config`). CloudFormation only gets `ConfigSecretArn`. Re-run attach after pulling if Secrets Manager / SSM Session / CloudWatch Logs permissions were added (`make logs` needs `ssm:StartSession` + `logs:FilterLogEvents`).
+
+**Infra (CDK):** edit TypeScript under `infra/cdk/`, then `make synth-infra` (writes `infra/ec2.yaml` + `infra/lambda.yaml`). Deploy/Enable still use those generated templates via CloudFormation — you do not need `cdk deploy` for the demo path.
 ### 2. CLI
 
 ```bash
@@ -74,9 +77,10 @@ Quote Cockroach URLs (`&` breaks unquoted `source .env`):
 CLUSTER_URL='postgresql://.../defaultdb?sslmode=verify-full'
 COCKROACH_CLUSTER_ID=…          # Cloud Overview → make cockroach-ca
 MEMSTREAM_SECRETS_KEY=$(openssl rand -hex 32)
-# Optional lock for console APIs (also set NEXT_PUBLIC_… for the browser):
-# MEMSTREAM_CONSOLE_TOKEN=…
-# NEXT_PUBLIC_MEMSTREAM_CONSOLE_TOKEN=…
+# Optional console lock (no login UI — same token for server + browser):
+# MEMSTREAM_CONSOLE_TOKEN=$(openssl rand -hex 24)
+# NEXT_PUBLIC_MEMSTREAM_CONSOLE_TOKEN=$MEMSTREAM_CONSOLE_TOKEN
+# Restart `make web` after changing these (make web now loads root .env).
 CDC_S3_BUCKET=memstream-cdc-yourname
 CDC_S3_PREFIX=cdc/
 AWS_REGION=us-east-1
@@ -163,8 +167,9 @@ Lambda: delete the run in the console, or delete `${STACK_NAME}-lambda` in Cloud
 | Shop CIDR | `SHOP_CIDR` (default `0.0.0.0/0` — tighten to your IP/`32`) |
 | Instance | `INSTANCE_TYPE=t3.micro` |
 | Update EC2 code | `make destroy-aws && make deploy-aws` |
-| EC2 logs | SSM → `journalctl -u memstream-shop -u memstream-watch -f` |
-| Lambda logs | `aws logs tail /aws/lambda/memstream-demo-lambda-worker --follow` |
+| Combined logs | `make logs` (Lambda CloudWatch + EC2 journal in one terminal) |
+| EC2 only | `make logs LOGS=ec2` or SSM → `sudo journalctl -u memstream-shop -u memstream-watch -f` |
+| Lambda only | `make logs LOGS=lambda` or `aws logs tail /aws/lambda/memstream-demo-lambda-worker --follow` |
 | CDC without long-lived keys | `MEMSTREAM_CDC_ROLE_ARN` + trust Cockroach Cloud identity (AUTH=implicit) |
 
 Stacks do **not** create the Cockroach cluster, changefeed, or public MCP.
@@ -217,10 +222,12 @@ make changefeed-dry && make changefeed
 | `NoSuchBucket` | Bucket name vs `AWS_REGION` |
 | Cockroach SSL / auth | `PGSSLROOTCERT` / `make cockroach-ca`; URL `sslmode=verify-full` |
 | `MEMSTREAM_SECRETS_KEY required` | `openssl rand -hex 32` in `.env`, then redeploy (`UserData` only runs on new instances) |
-| Enable on EC2: `Missing template …/infra/ec2.yaml` | EC2 redeploy is skipped on prebuilt; for Lambda, redeploy so the artifact includes `infra/lambda.yaml` + `deploy/memstream-lambda.zip` |
+| Enable on EC2: `Missing template …/infra/ec2.yaml` | EC2 redeploy is skipped on prebuilt; for Lambda, redeploy so the artifact includes `infra/lambda.yaml` + `deploy/memstream-lambda.zip`. From a laptop: `make synth-infra` if YAML is missing. |
+| Edit EC2/Lambda infra | Change `infra/cdk/` (TypeScript), run `make synth-infra`, then deploy/Enable |
 | Enable on EC2: `s3:PutObject` AccessDenied | InstanceRole needs write on `${CDC_S3_PREFIX}*` — update stack (`make deploy-aws`); IAM applies without replace |
 | ShopUrl unreachable | Wait for userdata; check console for `next build` errors; confirm `SHOP_CIDR` includes your IP |
 | No S3 objects | Changefeed job; sink IAM / `MEMSTREAM_CDC_ROLE_ARN`; table names |
 | Chunks empty | Profile rules; `diff`; cursor skipping keys |
+| Control plane probe | `curl -s http://localhost:3000/api/health` — expects `platform_db` healthy |
 
 Do not commit `.env` or paste secrets into chat.

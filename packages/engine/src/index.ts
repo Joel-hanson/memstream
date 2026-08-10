@@ -1,6 +1,24 @@
 /** @memstream/engine — TypeScript memory fabric. */
 
 export {
+  RUN_STATUS,
+  JOB_STEP_STATUS,
+  WORKER_COMPUTE,
+  EVENT_SOURCE,
+  EMBEDDER_KIND,
+  STORE_KIND,
+  INFRA_TEMPLATE,
+  isTerminalRunStatus,
+  isActiveRunStatus,
+  type RunStatus,
+  type JobStepStatusValue,
+  type WorkerComputeKind,
+  type EventSourceKind,
+  type EmbedderKind,
+  type StoreKind,
+  type InfraTemplateKindValue,
+} from "./constants.js";
+export {
   changedColumns,
   type ChangeEvent,
   type JsonObject,
@@ -23,10 +41,14 @@ export {
 } from "./profile.js";
 export {
   ensureProfilesSeeded,
+  listProfileVersions,
   listStoredProfiles,
   resolveProfile,
   resolveProfileDraft,
+  restoreProfileVersion,
   saveStoredProfile,
+  PROFILE_VERSION_KEEP,
+  type ProfileVersionInfo,
   type StoredProfileInfo,
 } from "./profile-store.js";
 export { matchRules } from "./rules.js";
@@ -102,30 +124,28 @@ export {
   buildPipelineStatus,
   cdcProcessedStats,
   changefeedMetrics,
-  consoleDir,
+  clearS3CdcPrefix,
   listProfiles,
   listRecentChunks,
   loadProfileDraft,
   memoryMetrics,
   profileTables,
   proposeFromDatabase,
-  readSessionEnv,
   repoRoot,
   runEnablePipeline,
   saveProfileYaml,
   s3CdcSnapshot,
-  s3ObjectCount,
-  sessionEnvPath,
   splitSqlStatements,
   stackOutputs,
   teardownAndDeleteRun,
-  writeSessionEnv,
   type S3CdcSnapshot,
   type TeardownResult,
 } from "./console-actions.js";
 export {
   computeLagSeconds,
   derivePipelineHealth,
+  isCdcRecent,
+  CDC_RECENT_SECONDS,
   MEMORY_LAG_WARN_SECONDS,
   type CheckStatus,
   type DerivePipelineHealthInput,
@@ -151,7 +171,6 @@ export {
   listRuns,
   jobSnapshotFromRun,
   memstreamDatabaseUrl,
-  updateRunLog,
   updateRunProgress,
   type CreateRunInput,
   type MemstreamRun,
@@ -164,19 +183,30 @@ export {
   listConnections,
   resolveAppDatabaseUrl,
   upsertConnection,
-  getWorkspace,
-  listWorkspaces,
-  upsertWorkspace,
-  getActiveWorkspace,
   type MemstreamConnection,
   type MemstreamWorkspace,
   type UpsertConnectionInput,
 } from "./connections.js";
 export {
+  createOrg,
+  createOrgInvite,
+  getOrg,
+  isInviteCode,
+  isOrgId,
+  listOrgs,
+  redeemOrgInvite,
+  type MemstreamOrg,
+  type MemstreamOrgInvite,
+} from "./orgs.js";
+export {
   decryptSecret,
   encryptSecret,
   memstreamSecretsKey,
 } from "./secrets.js";
+export {
+  infraTemplatePath,
+  type InfraTemplateKind,
+} from "./infra-templates.js";
 export {
   deleteAwsStack,
   deployAwsStack,
@@ -217,7 +247,6 @@ export {
   PRODUCT,
   RESOURCES,
   resourceById,
-  resourceLabel,
   stepStatusCopy,
   type ResourceCopy,
   type ResourceId,
@@ -225,7 +254,6 @@ export {
 } from "./naming.js";
 export {
   getJobStore,
-  JobStore,
   bindJobToRun,
   type Job,
   type JobStep,
@@ -233,16 +261,39 @@ export {
   type PersistJobProgress,
 } from "./jobs.js";
 export {
+  PlatformState,
+  getPlatformState,
+  type JobSnapshot,
+  type CdcKeysOptions,
+} from "./state-manager.js";
+export {
+  createShutdownController,
+  type ShutdownController,
+} from "./shutdown.js";
+export {
+  resilientBedrock,
+  resilientS3,
+  withResilience,
+} from "./resilience.js";
+export { withClient, withClientObjects, closePools } from "./db.js";
+export {
   CockroachShop,
   emitCdcFile,
-  getMemoryShop,
   getShop,
   InMemoryShop,
   listCdcFiles,
   ShopError,
   type PlaceOrderInput,
   type OpenTicketInput,
+  type AddCaseNoteInput,
   type SetUserRoleInput,
   type Shop,
   type ShopActionResult,
 } from "./shop.js";
+export {
+  DEMO_HISTORY_SEEDS,
+  formatCaseNoteChunk,
+  saveMemoryTexts,
+  seedDemoHistoryMemory,
+  type DemoHistorySeed,
+} from "./demo-history.js";

@@ -1,11 +1,9 @@
 import {
-  getActiveConnection,
-  listConnections,
   memstreamDatabaseUrl,
   upsertConnection,
 } from "@memstream/engine";
 import { jsonError, jsonOk, readJsonBody, webRepoRoot } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 import { isUsableDatabaseUrl, maskDatabaseUrl } from "@/lib/connect-url";
 
 export const runtime = "nodejs";
@@ -40,37 +38,8 @@ function publicConnection(connection: {
   };
 }
 
-export async function GET(req: Request) {
-  const denied = requireConsoleAuth(req);
-  if (denied) return denied;
-
-  const root = webRepoRoot();
-  const configured = Boolean(memstreamDatabaseUrl(root));
-  if (!configured) {
-    return jsonOk({
-      configured: false,
-      connection: null,
-      connections: [],
-      detail: "MEMSTREAM_DATABASE_URL not configured",
-    });
-  }
-  try {
-    const [connection, connections] = await Promise.all([
-      getActiveConnection(root),
-      listConnections(root),
-    ]);
-    return jsonOk({
-      configured: true,
-      connection: connection ? publicConnection(connection) : null,
-      connections,
-    });
-  } catch (err) {
-    return jsonError(err instanceof Error ? err.message : String(err), 500);
-  }
-}
-
 export async function PUT(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req);
   if (denied) return denied;
 
   const root = webRepoRoot();
@@ -87,6 +56,7 @@ export async function PUT(req: Request) {
     prefix?: string;
     name?: string;
     id?: string;
+    org_id?: string;
   };
   const databaseUrl = body.database_url?.trim() || "";
   if (!isUsableDatabaseUrl(databaseUrl)) {
@@ -94,6 +64,10 @@ export async function PUT(req: Request) {
       "Paste a real Cockroach DATABASE_URL (not a placeholder)",
     );
   }
+  const orgId =
+    body.org_id?.trim() ||
+    req.headers.get("x-memstream-org")?.trim() ||
+    undefined;
   try {
     const connection = await upsertConnection({
       databaseUrl,
@@ -102,6 +76,7 @@ export async function PUT(req: Request) {
       prefix: body.prefix,
       name: body.name,
       id: body.id,
+      orgId: orgId || null,
       root,
     });
     return jsonOk({ connection: publicConnection(connection) });

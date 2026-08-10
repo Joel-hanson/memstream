@@ -5,6 +5,36 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** Copy text; falls back when Clipboard API is missing (e.g. non-secure HTTP). */
+export async function copyToClipboard(text: string): Promise<void> {
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.clipboard &&
+    typeof navigator.clipboard.writeText === "function"
+  ) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is not available")
+  }
+
+  const ta = document.createElement("textarea")
+  ta.value = text
+  ta.setAttribute("readonly", "")
+  ta.style.position = "fixed"
+  ta.style.left = "-9999px"
+  ta.style.top = "0"
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  ta.setSelectionRange(0, text.length)
+  const ok = document.execCommand("copy")
+  document.body.removeChild(ta)
+  if (!ok) throw new Error("Could not copy to clipboard")
+}
+
 /** Filename-safe profile id from an application label. */
 export function suggestProfileId(name: string): string {
   const slug = name

@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "infra/cdk"
   ],
   "scripts": {
     "dev": "npm run build -w @memstream/engine && npm run dev -w web",
@@ -11,6 +12,7 @@
     "build:engine": "npm run build -w @memstream/engine",
     "build:mcp": "npm run build -w @memstream/mcp",
     "build:web": "npm run build -w web",
+    "synth:infra": "npm run synth -w @memstream/infra",
     "test:engine": "npm run test -w @memstream/engine",
     "worker": "npm run build -w @memstream/engine && node packages/engine/dist/cli.js",
     "changefeed": "npm run build -w @memstream/engine && node packages/engine/dist/changefeed-cli.js",

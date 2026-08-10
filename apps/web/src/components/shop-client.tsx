@@ -1,18 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-import {
-  RiAddLine,
-  RiArrowLeftLine,
-  RiArrowRightLine,
-  RiCheckLine,
-  RiCustomerService2Line,
-  RiFileCopyLine,
-  RiShoppingBag3Line,
-  RiTruckLine,
-} from "@remixicon/react";
 import {
   adjustStockAction,
   openTicketAction,
@@ -21,38 +11,43 @@ import {
   setUserRoleAction,
   shipOrderAction,
 } from "@/app/shop/actions";
-import { MemstreamMark } from "@/components/memstream-mark";
+import { ShopAskChat } from "@/components/shop-support-chat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { consoleApi } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
+import {
+  DEMO_ASK_PROMPT,
+  productForSku,
+  ROLE_CHANGE_ASK,
+  SHOP_PRODUCTS,
+  STOCK_SIMILARITY_ASK,
+  STORE,
+  type CatalogProduct,
+} from "@/lib/shop-catalog";
+import { cn, copyToClipboard } from "@/lib/utils";
+import {
+  RiAddLine,
+  RiArrowRightLine,
+  RiCheckLine,
+  RiCustomerService2Line,
+  RiFileCopyLine,
+  RiShoppingBag3Line,
+  RiSparklingLine,
+  RiTruckLine,
+} from "@remixicon/react";
 
 type Row = Record<string, unknown>;
+type ShopMode = "customer" | "staff";
 
 const CUSTOMER_LABELS: Record<string, string> = {
   c1: "Alex",
   c2: "Sam",
 };
 
-/** Primary ask prompt from docs/DEMO_SCRIPT.md Beat 4. */
-const DEMO_ASK_PROMPT = `Why is Alex upset about SKU-12?
-1) Call Memstream search_memory first and cite the chunks.
-2) Then use Cockroach Cloud MCP SQL to confirm the live order 100 status, SKU-12 stock, and any ticket for that order.
-Answer in 3 short bullets: what happened, what memory shows, what SQL confirms.`;
-
-/** Optional Path B: similarity over repeated stock drops. */
-const STOCK_SIMILARITY_ASK = `Have we seen stock drops like SKU-12 before?
-1) Call Memstream search_memory and cite similar inventory chunks.
-2) Then use Cockroach Cloud MCP SQL to confirm current SKU-12 quantity in stock.
-Answer in 2 short bullets: what memory shows, what SQL confirms.`;
-
-/** saas-security / discovered users_role_change. */
-const ROLE_CHANGE_ASK = `Did anyone get a privilege change in org-acme?
-1) Call Memstream search_memory first and cite the role-change chunks.
-2) Then use Cockroach Cloud MCP SQL to confirm user u1 (admin@acme.test) current role.
-Answer in 2 short bullets: what memory shows, what SQL confirms.`;
+/** Demo customer browsing the storefront. */
+const SHOPPER_ID = "c1";
 
 function customerLabel(id: string): string {
   return CUSTOMER_LABELS[id] ?? id;
@@ -92,40 +87,63 @@ function PendingButton({
   );
 }
 
-function Step({
-  n,
-  title,
-  done,
-  active,
+function ProductArt({
+  product,
+  className,
 }: {
-  n: number;
-  title: string;
-  done?: boolean;
-  active?: boolean;
+  product: CatalogProduct;
+  className?: string;
 }) {
+  const bg = product.accent;
+  if (product.lamp === "mug") {
+    return (
+      <svg viewBox="0 0 200 200" className={cn("size-full", className)} aria-hidden>
+        <rect width="200" height="200" fill={bg} />
+        <rect
+          x="62"
+          y="56"
+          width="70"
+          height="90"
+          rx="8"
+          fill="oklch(0.97 0.01 80)"
+          stroke="oklch(0.4 0.03 55)"
+          strokeWidth="1.5"
+        />
+        <path
+          d="M132 78 H148 C158 78 164 90 164 102 C164 114 158 126 148 126 H132"
+          fill="none"
+          stroke="oklch(0.4 0.03 55)"
+          strokeWidth="1.5"
+        />
+      </svg>
+    );
+  }
+
+  const shade =
+    product.lamp === "studio"
+      ? "M78 118 C78 70 122 58 122 118"
+      : product.lamp === "harbor"
+        ? "M88 118 L100 72 L112 118 Z"
+        : "M80 118 C80 72 120 64 120 118";
+
   return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 border px-3 py-2",
-        done && "border-foreground/20 bg-muted/40",
-        active && !done && "border-foreground/40 bg-background",
-        !active && !done && "border-border bg-muted/20 text-muted-foreground",
-      )}
-    >
-      <div
-        className={cn(
-          "flex size-5 shrink-0 items-center justify-center text-[0.65rem] font-medium",
-          done
-            ? "bg-primary text-primary-foreground"
-            : active
-              ? "bg-foreground text-background"
-              : "bg-muted text-muted-foreground",
-        )}
-      >
-        {done ? <RiCheckLine className="size-3" /> : n}
-      </div>
-      <div className="truncate text-xs font-medium text-foreground">{title}</div>
-    </div>
+    <svg viewBox="0 0 200 200" className={cn("size-full", className)} aria-hidden>
+      <rect width="200" height="200" fill={bg} />
+      <ellipse cx="100" cy="168" rx="36" ry="7" fill="oklch(0.75 0.03 70)" />
+      <path
+        d="M78 168 L84 118 H116 L122 168 Z"
+        fill="oklch(0.9 0.03 75)"
+        stroke="oklch(0.4 0.03 55)"
+        strokeWidth="1.5"
+      />
+      <path
+        d={shade}
+        fill="oklch(0.97 0.015 85)"
+        stroke="oklch(0.4 0.03 55)"
+        strokeWidth="1.5"
+      />
+      <circle cx="100" cy="100" r="7" fill="oklch(0.88 0.08 85)" />
+    </svg>
   );
 }
 
@@ -142,67 +160,50 @@ export function ShopClient({
   stock: Row[];
   tickets: Row[];
   users?: Row[];
-  cdc?: { path: string; preview: string }[];
   message?: string;
   error?: string;
   backend?: string;
 }) {
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [mode, setMode] = useState<ShopMode>("customer");
   const [copied, setCopied] = useState(false);
   const [stockAskCopied, setStockAskCopied] = useState(false);
   const [roleAskCopied, setRoleAskCopied] = useState(false);
   const [mcpCopied, setMcpCopied] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatHint, setChatHint] = useState(false);
 
-  const pendingOrders = orders.filter((o) => String(o.status) !== "shipped");
-  const shippedOrders = orders.filter((o) => String(o.status) === "shipped");
-
-  /** Demo script hero: prefer order 100 when still pending. */
-  const heroOrder =
-    pendingOrders.find((o) => String(o.id) === "100") ??
-    pendingOrders[0] ??
-    null;
-
-  const ticketedOrderIds = new Set(
-    tickets.map((t) => String(t.order_id ?? "")).filter(Boolean),
+  const stockBySku = new Map(
+    stock.map((r) => [String(r.sku), Number(r.quantity)]),
   );
 
-  /** Prefer shipped order 100 for the complaint beat. */
-  const ticketOrder =
-    shippedOrders.find(
-      (o) =>
-        String(o.id) === "100" && !ticketedOrderIds.has(String(o.id)),
-    ) ??
-    shippedOrders.find((o) => !ticketedOrderIds.has(String(o.id))) ??
-    null;
-
-  const order100 = orders.find((o) => String(o.id) === "100") ?? null;
-  const order100Shipped = order100
-    ? String(order100.status) === "shipped"
-    : shippedOrders.some((o) => String(o.id) === "100");
-  const hasTicketFor100 = ticketedOrderIds.has("100");
-  const hasAnyTicket = tickets.length > 0;
-
-  const shipDone = order100Shipped || shippedOrders.length > 0;
-  const ticketDone = hasTicketFor100 || (shipDone && hasAnyTicket && !ticketOrder);
-  const dramaDone = shipDone && ticketDone;
-
-  const phase: "ship" | "ticket" | "done" = !shipDone
-    ? "ship"
-    : ticketOrder
-      ? "ticket"
-      : "done";
-
-  const otherPending = pendingOrders.filter(
-    (o) => !heroOrder || String(o.id) !== String(heroOrder.id),
+  const ticketByOrder = new Map(
+    tickets.map((t) => [String(t.order_id), t] as const),
   );
 
-  const sku12 = stock.find((r) => String(r.sku) === "SKU-12") ?? null;
-  const sku12Qty = sku12 != null ? Number(sku12.quantity) : 0;
+  const myOrders = orders
+    .filter((o) => String(o.customer_id) === SHOPPER_ID)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+  const allOrders = [...orders].sort((a, b) =>
+    String(a.id).localeCompare(String(b.id)),
+  );
+
+  const hasMyTicket = myOrders.some((o) => ticketByOrder.has(String(o.id)));
+  const dramaDone = hasMyTicket;
+
+  const sku12Qty = stockBySku.get("SKU-12") ?? 0;
   const canDropSku12 = sku12Qty > 0;
+
+  const lampProducts = SHOP_PRODUCTS.filter((p) => p.featured);
+  const otherProducts = SHOP_PRODUCTS.filter((p) => !p.featured);
+
+  useEffect(() => {
+    setChatHint(dramaDone && mode === "customer");
+  }, [dramaDone, mode]);
 
   async function copyAskPrompt() {
     try {
-      await navigator.clipboard.writeText(DEMO_ASK_PROMPT);
+      await copyToClipboard(DEMO_ASK_PROMPT);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -212,7 +213,7 @@ export function ShopClient({
 
   async function copyStockAsk() {
     try {
-      await navigator.clipboard.writeText(STOCK_SIMILARITY_ASK);
+      await copyToClipboard(STOCK_SIMILARITY_ASK);
       setStockAskCopied(true);
       window.setTimeout(() => setStockAskCopied(false), 2000);
     } catch {
@@ -222,7 +223,7 @@ export function ShopClient({
 
   async function copyRoleAsk() {
     try {
-      await navigator.clipboard.writeText(ROLE_CHANGE_ASK);
+      await copyToClipboard(ROLE_CHANGE_ASK);
       setRoleAskCopied(true);
       window.setTimeout(() => setRoleAskCopied(false), 2000);
     } catch {
@@ -234,7 +235,7 @@ export function ShopClient({
     const result = await consoleApi.mcpConfig();
     if (!result.ok || !result.value.json) return;
     try {
-      await navigator.clipboard.writeText(result.value.json);
+      await copyToClipboard(result.value.json);
       setMcpCopied(true);
       window.setTimeout(() => setMcpCopied(false), 2000);
     } catch {
@@ -244,51 +245,87 @@ export function ShopClient({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
-        <div className="mx-auto flex h-12 w-full max-w-xl items-center gap-3 px-4">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center bg-primary text-primary-foreground">
-              <MemstreamMark className="size-4" />
+      <header className="sticky top-0 z-40 border-b border-foreground/10 bg-[oklch(0.985_0.004_85)]/95 backdrop-blur-sm">
+        <div className="mx-auto flex h-14 w-full max-w-3xl items-center gap-3 px-4">
+          <div className="min-w-0 leading-tight">
+            <div className="font-(family-name:--font-shop-display) text-xl tracking-tight">
+              {STORE.name}
             </div>
-            <div className="leading-tight">
-              <div className="text-sm font-medium">Memstream</div>
-              <div className="hidden text-xs text-muted-foreground sm:block">
-                Demo shop
-              </div>
+            <div className="truncate text-[0.65rem] text-muted-foreground">
+              {mode === "customer"
+                ? `Shopping as ${STORE.customer}`
+                : "Staff · fulfill, stock, roles"}
             </div>
-          </Link>
-          <div className="ml-auto">
-            <Button type="button" variant="ghost" size="sm" asChild>
-              <Link href="/">
-                <RiArrowLeftLine />
-                Live console
-              </Link>
-            </Button>
           </div>
+
+          <div
+            className="ml-auto flex shrink-0 border border-foreground/15 p-0.5"
+            role="tablist"
+            aria-label="Shop mode"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "customer"}
+              className={cn(
+                "px-2.5 py-1 text-xs transition-colors",
+                mode === "customer"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setMode("customer")}
+            >
+              Shop
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "staff"}
+              className={cn(
+                "px-2.5 py-1 text-xs transition-colors",
+                mode === "staff"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setMode("staff")}
+            >
+              Staff
+            </button>
+          </div>
+
+          {mode === "customer" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setChatOpen(true)}
+            >
+              <RiCustomerService2Line />
+              Support
+            </Button>
+          ) : (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setChatOpen(true)}
+              >
+                <RiSparklingLine />
+                Agent
+              </Button>
+              <Button type="button" variant="ghost" size="sm" asChild>
+                <Link href="/">
+                  Live
+                  <RiArrowRightLine />
+                </Link>
+              </Button>
+            </>
+          )}
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-5 p-4 pb-12">
-        <div className="space-y-1">
-          <h1 className="text-lg font-medium tracking-tight">
-            Ship, then open a complaint
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Two clicks here. Then check Live and ask in Cursor.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Step n={1} title="Ship Alex’s order" done={shipDone} active={phase === "ship"} />
-          <Step
-            n={2}
-            title="Open complaint"
-            done={ticketDone}
-            active={phase === "ticket"}
-          />
-          <Step n={3} title="See it in Live" done={dramaDone} active={phase === "done"} />
-        </div>
-
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-10 px-4 pt-6 pb-28">
         {error ? (
           <div className="border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error}
@@ -296,310 +333,310 @@ export function ShopClient({
         ) : null}
 
         {message ? (
-          <div className="border border-foreground/15 bg-muted/30 px-4 py-3 text-sm">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="animate-in fade-in slide-in-from-top-2 border border-foreground/15 bg-background px-4 py-3 duration-500">
+            <div className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
               Just now
             </div>
-            <p className="mt-1">{message}</p>
+            <p className="mt-1 text-sm">{message}</p>
           </div>
         ) : null}
 
-        {/* Beat 1: Ship */}
-        {phase === "ship" ? (
-          <section className="space-y-3 border border-foreground/25 bg-muted/20 px-4 py-4">
-            <div>
-              <h2 className="text-sm font-medium">1. Ship Alex’s order</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Updates the order status in Cockroach to shipped.
-              </p>
-            </div>
-
-            {heroOrder ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 border bg-background px-4 py-4">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-base font-medium">
-                      Order #{String(heroOrder.id)}
-                    </span>
-                    <Badge variant="outline">pending</Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {customerLabel(String(heroOrder.customer_id))}
-                    {orderSku(heroOrder) ? ` · ${orderSku(heroOrder)}` : ""}
-                  </p>
-                </div>
-                <form action={shipOrderAction}>
-                  <input
-                    type="hidden"
-                    name="order_id"
-                    value={String(heroOrder.id)}
-                  />
-                  <PendingButton
-                    label="Ship order"
-                    pendingLabel="Shipping…"
-                    size="lg"
-                    icon={<RiTruckLine />}
-                  />
-                </form>
-              </div>
-            ) : (
-              <div className="space-y-3 border border-dashed px-4 py-6 text-center">
-                <p className="text-sm text-muted-foreground">
-                  No pending orders. Place one for Alex, or run{" "}
-                  <span className="font-mono text-foreground">make demo-reset</span>.
+        {mode === "customer" ? (
+          <>
+            <section className="animate-in fade-in space-y-4 duration-700">
+              <div>
+                <h1 className="font-(family-name:--font-shop-display) text-3xl tracking-tight sm:text-4xl">
+                  Lamps
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Browse and buy. If something arrives broken, report it on your
+                  order — then ask Support.
                 </p>
-                {stock.some((r) => Number(r.quantity) > 0) ? (
-                  <form action={placeOrderAction} className="inline-flex">
-                    <input type="hidden" name="sku" value="SKU-12" />
-                    <input type="hidden" name="quantity" value="1" />
-                    <input type="hidden" name="customer_id" value="c1" />
-                    <PendingButton
-                      label="Place order for Alex (SKU-12)"
-                      pendingLabel="Ordering…"
-                      icon={<RiShoppingBag3Line />}
-                    />
-                  </form>
+                {backend !== "cockroach" ? (
+                  <p className="mt-2 text-xs text-destructive">
+                    Shop is on in-memory backend — connect Cockroach for the full
+                    demo.
+                  </p>
                 ) : null}
               </div>
-            )}
-          </section>
-        ) : null}
 
-        {/* Beat 2: Ticket */}
-        {phase === "ticket" && ticketOrder ? (
-          <section className="space-y-3 border border-foreground/25 bg-muted/20 px-4 py-4">
-            <div>
-              <h2 className="text-sm font-medium">2. Open a complaint</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Alex says the item arrived damaged. That ticket is the second write.
-              </p>
-            </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {lampProducts.map((product) => {
+                  const qty = stockBySku.get(product.sku) ?? 0;
+                  const out = !(qty > 0);
+                  return (
+                    <article
+                      key={product.sku}
+                      className="flex flex-col border border-foreground/15 bg-background"
+                    >
+                      <div className="aspect-square border-b border-foreground/10">
+                        <ProductArt product={product} />
+                      </div>
+                      <div className="flex flex-1 flex-col gap-3 p-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="font-(family-name:--font-shop-display) text-lg tracking-tight">
+                            {product.name}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {product.blurb}
+                          </p>
+                          <p className="text-[0.65rem] text-muted-foreground">
+                            {product.sku} · {out ? "sold out" : `${qty} left`}
+                          </p>
+                        </div>
+                        <form action={placeOrderAction} className="mt-auto">
+                          <input type="hidden" name="sku" value={product.sku} />
+                          <input type="hidden" name="quantity" value="1" />
+                          <input
+                            type="hidden"
+                            name="customer_id"
+                            value={SHOPPER_ID}
+                          />
+                          <PendingButton
+                            label={out ? "Sold out" : "Buy"}
+                            pendingLabel="Buying…"
+                            size="sm"
+                            disabled={out}
+                            icon={<RiShoppingBag3Line />}
+                          />
+                        </form>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
 
-            <div className="space-y-3 border bg-background px-4 py-4">
-              <p className="text-sm">
-                Order #{String(ticketOrder.id)} shipped ·{" "}
-                {customerLabel(String(ticketOrder.customer_id))}
-                {orderSku(ticketOrder) ? ` · ${orderSku(ticketOrder)}` : ""}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                “
-                {orderSku(ticketOrder) || "SKU-12"} arrived damaged.”
-              </p>
-              <form action={openTicketAction}>
-                <input
-                  type="hidden"
-                  name="order_id"
-                  value={String(ticketOrder.id)}
-                />
-                <input type="hidden" name="body" value="" />
-                <PendingButton
-                  label="Open complaint ticket"
-                  pendingLabel="Opening…"
-                  size="lg"
-                  icon={<RiCustomerService2Line />}
-                />
-              </form>
-            </div>
-          </section>
-        ) : null}
-
-        {/* Beat 3: Done / handoff */}
-        {phase === "done" ? (
-          <section className="space-y-4 border border-foreground/25 bg-muted/20 px-4 py-4">
-            <div>
-              <h2 className="text-sm font-medium">3. Check memory, then ask</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Both writes are in Cockroach. Open Live for the chunks, then ask
-                in Cursor.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="lg" asChild>
-                <Link href="/">
-                  See chunks in Live
-                  <RiArrowRightLine />
-                </Link>
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                onClick={() => void copyAskPrompt()}
-              >
-                <RiFileCopyLine />
-                {copied ? "Copied ask" : "Copy ask prompt"}
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                onClick={() => void copyMcpConfig()}
-              >
-                <RiFileCopyLine />
-                {mcpCopied ? "Copied MCP" : "Copy Memstream MCP"}
-              </Button>
-            </div>
-
-            {tickets[0] ? (
-              <p className="text-xs text-muted-foreground">
-                Ticket {String(tickets[0].id)} · order{" "}
-                {String(tickets[0].order_id)} · {String(tickets[0].status)}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
-
-        {/* Path B: optional after the main flow (same shop / commerce profile) */}
-        {dramaDone ? (
-          <section
-            id="path-b"
-            className="space-y-3 border border-dashed px-4 py-4"
-          >
-            <div>
-              <h2 className="text-sm font-medium">
-                Optional: similar stock drops
-              </h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                After the Alex story, drop SKU-12 again so memory has more than
-                one inventory event. Then ask whether you have seen drops like
-                this before.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <form action={adjustStockAction}>
-                <input type="hidden" name="sku" value="SKU-12" />
-                <input type="hidden" name="delta" value="-1" />
-                <PendingButton
-                  label={
-                    canDropSku12
-                      ? `Drop SKU-12 by 1 (${sku12Qty} left)`
-                      : "SKU-12 out of stock"
-                  }
-                  pendingLabel="Updating…"
-                  size="sm"
-                  variant="secondary"
-                  disabled={!canDropSku12}
-                />
-              </form>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void copyStockAsk()}
-              >
-                <RiFileCopyLine />
-                {stockAskCopied ? "Copied ask" : "Copy similarity ask"}
-              </Button>
-            </div>
-          </section>
-        ) : null}
-
-        {/* saas-security / discovered users_role_change */}
-        {users.length > 0 ? (
-          <section
-            id="path-security"
-            className="space-y-3 border border-dashed px-4 py-4"
-          >
-            <div>
-              <h2 className="text-sm font-medium">
-                Optional: role change (saas-security)
-              </h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Enable with saas-security or discovered (users watched). Promote
-                a member to admin, then ask about privilege changes in Live.
-              </p>
-            </div>
-            <ul className="space-y-2">
-              {users.map((u) => {
-                const id = String(u.id);
-                const email = String(u.email ?? id);
-                const role = String(u.role ?? "");
-                const canPromote =
-                  role === "member" || role === "viewer" || role === "user";
-                const nextRole = canPromote ? "admin" : "";
-                return (
-                  <li
-                    key={id}
-                    className="flex flex-wrap items-center justify-between gap-2 border px-3 py-2 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <span className="font-medium">{email}</span>
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · {id} · {role}
-                      </span>
-                    </div>
-                    {canPromote ? (
-                      <form action={setUserRoleAction}>
-                        <input type="hidden" name="user_id" value={id} />
-                        <input type="hidden" name="role" value={nextRole} />
-                        <PendingButton
-                          label={`Promote to ${nextRole}`}
-                          pendingLabel="Updating…"
-                          size="sm"
-                          variant="secondary"
-                        />
-                      </form>
-                    ) : (
-                      <form
-                        action={setUserRoleAction}
-                        className="flex items-center gap-1"
+              {otherProducts.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {otherProducts.map((product) => {
+                    const qty = stockBySku.get(product.sku) ?? 0;
+                    const out = !(qty > 0);
+                    return (
+                      <article
+                        key={product.sku}
+                        className="flex items-center gap-3 border border-dashed px-3 py-2"
                       >
-                        <input type="hidden" name="user_id" value={id} />
-                        <Input
-                          name="role"
-                          className="h-7 w-24"
-                          defaultValue={role === "admin" ? "member" : "admin"}
-                          aria-label={`New role for ${email}`}
-                        />
-                        <PendingButton
-                          label="Set role"
-                          pendingLabel="…"
-                          size="sm"
-                          variant="outline"
-                        />
-                      </form>
-                    )}
+                        <div className="size-14 shrink-0 border border-foreground/10">
+                          <ProductArt product={product} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium">
+                            {product.name}
+                          </div>
+                          <div className="text-[0.65rem] text-muted-foreground">
+                            {product.sku} · {out ? "sold out" : `${qty} left`}
+                          </div>
+                        </div>
+                        <form action={placeOrderAction}>
+                          <input type="hidden" name="sku" value={product.sku} />
+                          <input type="hidden" name="quantity" value="1" />
+                          <input
+                            type="hidden"
+                            name="customer_id"
+                            value={SHOPPER_ID}
+                          />
+                          <PendingButton
+                            label="Buy"
+                            pendingLabel="…"
+                            size="sm"
+                            variant="outline"
+                            disabled={out}
+                          />
+                        </form>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+
+            <section className="space-y-4">
+              <div>
+                <h2 className="font-(family-name:--font-shop-display) text-2xl tracking-tight">
+                  Your orders
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Staff ships from the Staff tab. You report damage and talk to
+                  Support.
+                </p>
+              </div>
+
+              <ul className="space-y-3">
+                {myOrders.length === 0 ? (
+                  <li className="border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                    No orders yet — buy a lamp above.
                   </li>
-                );
-              })}
-            </ul>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void copyRoleAsk()}
-            >
-              <RiFileCopyLine />
-              {roleAskCopied ? "Copied ask" : "Copy role-change ask"}
-            </Button>
-          </section>
-        ) : null}
+                ) : (
+                  myOrders.map((o) => {
+                    const id = String(o.id);
+                    const status = String(o.status);
+                    const sku = orderSku(o);
+                    const product = productForSku(sku);
+                    const ticket = ticketByOrder.get(id);
+                    const pending = status !== "shipped";
+                    const canTicket = status === "shipped" && !ticket;
+                    const done = Boolean(ticket);
 
-        {/* Compact next-hint while mid-flow after an action */}
-        {phase === "ticket" && message ? (
-          <p className="text-xs text-muted-foreground">
-            Next: open the complaint above, then check Live.
-          </p>
-        ) : null}
+                    return (
+                      <li
+                        key={id}
+                        className={cn(
+                          "border bg-background px-4 py-4",
+                          done
+                            ? "border-foreground/10 bg-muted/20"
+                            : "border-foreground/20",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-base font-medium">
+                                Order #{id}
+                              </span>
+                              <Badge variant={pending ? "outline" : "default"}>
+                                {pending ? "on the way" : "delivered"}
+                              </Badge>
+                              {ticket ? (
+                                <Badge variant="outline">
+                                  ticket {String(ticket.id)}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {product.name}
+                              {sku ? (
+                                <span className="text-muted-foreground/70">
+                                  {" "}
+                                  ({sku})
+                                </span>
+                              ) : null}
+                            </p>
+                            {pending ? (
+                              <p className="text-xs text-muted-foreground">
+                                Waiting for staff to ship this order.
+                              </p>
+                            ) : null}
+                            {ticket ? (
+                              <p className="text-sm text-muted-foreground">
+                                “{String(ticket.body)}”
+                              </p>
+                            ) : null}
+                          </div>
 
-        <div className="border-t pt-2">
-          <button
-            type="button"
-            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            onClick={() => setShowAdvanced((v) => !v)}
-          >
-            {showAdvanced
-              ? "Hide advanced"
-              : "Advanced (inventory, other orders)"}
-          </button>
-        </div>
+                          <div className="flex flex-wrap gap-2">
+                            {canTicket ? (
+                              <form action={openTicketAction}>
+                                <input
+                                  type="hidden"
+                                  name="order_id"
+                                  value={id}
+                                />
+                                <input type="hidden" name="body" value="" />
+                                <PendingButton
+                                  label="Report damage"
+                                  pendingLabel="Opening…"
+                                  size="sm"
+                                  icon={<RiCustomerService2Line />}
+                                />
+                              </form>
+                            ) : null}
+                            {done ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => setChatOpen(true)}
+                              >
+                                <RiCustomerService2Line />
+                                Ask Support
+                              </Button>
+                            ) : null}
+                            {done ? (
+                              <RiCheckLine className="size-4 self-center text-muted-foreground" />
+                            ) : null}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </section>
+          </>
+        ) : (
+          <>
+            <section className="space-y-4">
+              <div>
+                <h1 className="font-(family-name:--font-shop-display) text-3xl tracking-tight">
+                  Fulfillment
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Ship open orders. Customers report damage and use Support on
+                  the Shop tab.
+                </p>
+              </div>
 
-        {showAdvanced ? (
-          <div className="space-y-6 border px-3 py-3">
-            <section className="space-y-2">
-              <h3 className="text-xs font-medium">Inventory</h3>
+              <ul className="space-y-3">
+                {allOrders.map((o) => {
+                  const id = String(o.id);
+                  const status = String(o.status);
+                  const sku = orderSku(o);
+                  const product = productForSku(sku);
+                  const ticket = ticketByOrder.get(id);
+                  const pending = status !== "shipped";
+
+                  return (
+                    <li
+                      key={id}
+                      className="border border-foreground/15 bg-background px-4 py-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">Order #{id}</span>
+                            <Badge variant="outline">{status}</Badge>
+                            {ticket ? (
+                              <Badge variant="outline">
+                                ticket {String(ticket.id)}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            {customerLabel(String(o.customer_id))} ·{" "}
+                            {product.name}
+                            {sku ? ` (${sku})` : ""}
+                          </p>
+                        </div>
+                        {pending ? (
+                          <form action={shipOrderAction}>
+                            <input type="hidden" name="order_id" value={id} />
+                            <PendingButton
+                              label="Ship"
+                              pendingLabel="Shipping…"
+                              size="sm"
+                              icon={<RiTruckLine />}
+                            />
+                          </form>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            Shipped
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+
+            <section className="space-y-3">
+              <div>
+                <h2 className="font-(family-name:--font-shop-display) text-xl tracking-tight">
+                  Inventory
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Stock writes become memory too — use for the similarity ask.
+                </p>
+              </div>
               {stock.map((row) => {
                 const sku = String(row.sku);
                 const available = Number(row.quantity);
@@ -610,22 +647,24 @@ export function ShopClient({
                     className="flex flex-wrap items-center gap-2 border px-3 py-2"
                   >
                     <div className="min-w-0 flex-1 text-xs">
-                      <span className="font-medium">{sku}</span>
+                      <span className="font-medium">
+                        {productForSku(sku).name}
+                      </span>
                       <span className="text-muted-foreground">
                         {" "}
-                        · {outOfStock ? "out of stock" : `${available} in stock`}
+                        · {sku} ·{" "}
+                        {outOfStock ? "out of stock" : `${available} in stock`}
                       </span>
                     </div>
-                    <form action={placeOrderAction} className="flex items-center gap-1">
+                    <form action={adjustStockAction}>
                       <input type="hidden" name="sku" value={sku} />
-                      <input type="hidden" name="quantity" value="1" />
-                      <input type="hidden" name="customer_id" value="c1" />
+                      <input type="hidden" name="delta" value="-1" />
                       <PendingButton
-                        label="Order 1"
+                        label="−1"
                         pendingLabel="…"
                         size="sm"
+                        variant="secondary"
                         disabled={outOfStock}
-                        icon={<RiShoppingBag3Line />}
                       />
                     </form>
                     <form action={adjustStockAction}>
@@ -649,7 +688,8 @@ export function ShopClient({
                         className="h-7 w-16"
                         type="number"
                         min={0}
-                        defaultValue={String(row.quantity)}
+                        defaultValue={available}
+                        aria-label={`Set quantity for ${sku}`}
                       />
                       <PendingButton
                         label="Set"
@@ -661,51 +701,186 @@ export function ShopClient({
                   </div>
                 );
               })}
+              <div className="flex flex-wrap gap-2">
+                <form action={adjustStockAction}>
+                  <input type="hidden" name="sku" value="SKU-12" />
+                  <input type="hidden" name="delta" value="-1" />
+                  <PendingButton
+                    label={
+                      canDropSku12
+                        ? `Drop Field Lamp (${sku12Qty} left)`
+                        : "Field Lamp out of stock"
+                    }
+                    pendingLabel="Updating…"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!canDropSku12}
+                  />
+                </form>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void copyStockAsk()}
+                >
+                  <RiFileCopyLine />
+                  {stockAskCopied ? "Copied ask" : "Copy stock ask"}
+                </Button>
+              </div>
             </section>
 
-            {otherPending.length > 0 ? (
-              <section className="space-y-2">
-                <h3 className="text-xs font-medium">Other pending orders</h3>
-                {otherPending.map((o) => (
-                  <div
-                    key={String(o.id)}
-                    className="flex flex-wrap items-center justify-between gap-2 border px-3 py-2 text-xs"
-                  >
-                    <span>
-                      #{String(o.id)} · {customerLabel(String(o.customer_id))}
-                      {orderSku(o) ? ` · ${orderSku(o)}` : ""}
-                    </span>
-                    <form action={shipOrderAction}>
-                      <input type="hidden" name="order_id" value={String(o.id)} />
-                      <PendingButton
-                        label="Ship"
-                        pendingLabel="…"
-                        size="sm"
-                        icon={<RiTruckLine />}
-                      />
-                    </form>
-                  </div>
-                ))}
+            {users.length > 0 ? (
+              <section id="path-security" className="space-y-3">
+                <div>
+                  <h2 className="font-(family-name:--font-shop-display) text-xl tracking-tight">
+                    Users & roles
+                  </h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Admin path for saas-security — not customer Support.
+                  </p>
+                </div>
+                <ul className="space-y-2">
+                  {users.map((u) => {
+                    const id = String(u.id);
+                    const email = String(u.email ?? id);
+                    const role = String(u.role ?? "");
+                    const canPromote =
+                      role === "member" ||
+                      role === "viewer" ||
+                      role === "user";
+                    const nextRole = canPromote ? "admin" : "";
+                    return (
+                      <li
+                        key={id}
+                        className="flex flex-wrap items-center justify-between gap-2 border px-3 py-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-medium">{email}</span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · {id} · {role}
+                          </span>
+                        </div>
+                        {canPromote ? (
+                          <form action={setUserRoleAction}>
+                            <input type="hidden" name="user_id" value={id} />
+                            <input type="hidden" name="role" value={nextRole} />
+                            <PendingButton
+                              label={`Promote to ${nextRole}`}
+                              pendingLabel="Updating…"
+                              size="sm"
+                              variant="secondary"
+                            />
+                          </form>
+                        ) : (
+                          <form
+                            action={setUserRoleAction}
+                            className="flex items-center gap-1"
+                          >
+                            <input type="hidden" name="user_id" value={id} />
+                            <Input
+                              name="role"
+                              className="h-7 w-24"
+                              defaultValue={
+                                role === "admin" ? "member" : "admin"
+                              }
+                              aria-label={`New role for ${email}`}
+                            />
+                            <PendingButton
+                              label="Set role"
+                              pendingLabel="…"
+                              size="sm"
+                              variant="outline"
+                            />
+                          </form>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void copyRoleAsk()}
+                >
+                  <RiFileCopyLine />
+                  {roleAskCopied ? "Copied ask" : "Copy role-change ask"}
+                </Button>
               </section>
             ) : null}
 
-            {shippedOrders.length > 0 ? (
-              <section className="space-y-1">
-                <h3 className="text-xs font-medium">Shipped</h3>
-                <p className="text-xs text-muted-foreground">
-                  {shippedOrders
-                    .map((o) => `#${String(o.id)}`)
-                    .join(", ")}
+            <section className="space-y-3 border border-foreground/15 bg-background px-4 py-4">
+              <div>
+                <h2 className="font-(family-name:--font-shop-display) text-xl tracking-tight">
+                  Staff agent
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  This is the Memstream wow — ask why Alex is upset, about stock
+                  patterns, or role changes. Memory first, SQL to confirm.
                 </p>
-              </section>
-            ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="lg"
+                  onClick={() => setChatOpen(true)}
+                >
+                  <RiSparklingLine />
+                  Ask the agent
+                </Button>
+                <Button type="button" size="lg" variant="outline" asChild>
+                  <Link href="/">
+                    See chunks in Live
+                    <RiArrowRightLine />
+                  </Link>
+                </Button>
+              </div>
+            </section>
 
-            <p className="text-xs text-muted-foreground">
-              Backend: {backend === "cockroach" ? "CockroachDB" : "in-memory"}
-            </p>
-          </div>
-        ) : null}
+            <section className="space-y-3 border border-dashed px-4 py-4">
+              <div>
+                <h2 className="text-sm font-medium">Optional: Cursor + MCP</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Same questions over MCP if you want the IDE agent path on
+                  camera.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void copyAskPrompt()}
+                >
+                  <RiFileCopyLine />
+                  {copied ? "Copied ask" : "Copy Cursor ask"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void copyMcpConfig()}
+                >
+                  <RiFileCopyLine />
+                  {mcpCopied ? "Copied MCP" : "Copy Memstream MCP"}
+                </Button>
+              </div>
+            </section>
+          </>
+        )}
       </main>
+
+      <ShopAskChat
+        persona={mode === "staff" ? "staff" : "customer"}
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        highlight={
+          mode === "customer"
+            ? chatHint && dramaDone
+            : mode === "staff" && dramaDone
+        }
+      />
     </div>
   );
 }

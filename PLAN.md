@@ -68,7 +68,7 @@ Do **not** ship a four-page sidebar (Overview / Connect / Configure / Enable) as
 | API for console | Next.js Route Handlers / server actions | Talk to Cockroach, S3, Bedrock, CFN |
 | Memory worker / indexer | **TypeScript** (port from Python) | Same profile → chunk → embed → store loop |
 | Memstream MCP | TypeScript MCP server (or keep thin Python until ported) | `search_memory` |
-| Infra | CloudFormation (`infra/`) | Unchanged idea; userdata runs TS worker |
+| Infra | AWS CDK (`infra/cdk`) → synth → CFN YAML | Unchanged idea; userdata runs TS worker |
 | Config | YAML profiles under `profiles/` | Shared contract |
 
 **Why:** one language for product UI + APIs; shadcn fits a serious SaaS console; easier to ship configure-from-DB + pipeline UX than the interim FastAPI HTML console.
@@ -102,7 +102,7 @@ Given the product direction, we **should delete or stop investing in** clutter t
 
 | Area | Why |
 | --- | --- |
-| `profiles/`, `sql/`, `infra/` | Templates, schema, EC2 |
+| `profiles/`, `sql/`, `infra/` | Profiles, schema, CDK + generated CFN / deployer IAM |
 | `packages/engine`, `packages/mcp` | Worker + ask path + console libs |
 | `apps/web` | Product console + shop |
 | `docs/AWS.md`, `docs/DEMO_SCRIPT.md` | Judges + setup / video ask |
@@ -192,7 +192,7 @@ Same Cockroach **cluster** can host both as separate databases (e.g. `memstream`
 | **CDC processed keys** (`memstream_cdc_keys`) | **Memstream DB** | Worker cursor per connection / CDC scope |
 | Demo / app tables (`customers`, `orders`, `stock`, …) | **Application DB** | Connection stored in Memstream DB |
 | Memory chunks (`agent_memory_chunks` + vector index) | **Application DB** (same as app tables) | Same connection |
-| Local worker env bridge | `session.env` (file, mode `0600`) | Written on Enable from stored connection (not source of truth) |
+| Local worker env | Active `memstream_connections` + `.env` / Secrets Manager | `session.env` retired |
 | AWS / CDC bucket / region | `.env` (`CDC_S3_BUCKET`, `CDC_S3_PREFIX`, `AWS_REGION`) | Prefill into connection on Connect save; not editable in Connect UI |
 | Local JSON CDC cursor | `.memstream-state/*` or `MEMSTREAM_STATE_FILE` | Offline / tests only when platform DB unset |
 | Memory profiles | `profiles/*.yaml` | Configure modal |
@@ -289,7 +289,7 @@ Application schema (`sql/application.sql` — tables + seed; `vector_index.sql` 
 | --- | --- |
 | Console boots | Ensure Memstream schema on `MEMSTREAM_DATABASE_URL`; load latest run for hydrate |
 | Connect | User sets **application** `DATABASE_URL` (+ Advanced). Does not edit Memstream DB URL |
-| Enable starts | Insert `memstream_runs` on **Memstream DB**; keep `JobStore` for live polling; write `session.env` for worker |
+| Enable starts | Insert `memstream_runs` on **Memstream DB**; `JobStore` for live polling; connection row is worker config |
 | Enable log lines | Append to in-memory job **and** update `log` on the Memstream run row |
 | Enable finishes | Set `succeeded` / `failed`, `shop_url`, `finished_at` on Memstream DB |
 | Live home load | Latest run from Memstream DB + Connect defaults + pipeline/memory against **application** DB |
@@ -305,8 +305,8 @@ Implement in this order so each step is demo-safe:
 2. **Schema** — `sql/memstream.sql` (platform). `sql/application.sql` for application DB (app tables + `agent_memory_chunks` + seed).
 3. **Engine helpers** (`packages/engine`) — `withMemstreamDb()` from `MEMSTREAM_DATABASE_URL`; `createRun` / `appendRunLog` / `finishRun` / `getLatestRun()` — **no** application URL required to read runs. Memory/pipeline helpers still take Connect `databaseUrl`.
 4. **Boot / first use** — Apply `memstream.sql` once (lazy on first `/api/runs/*` or console defaults).
-5. **Wire Enable** — Create/finish run on Memstream DB; apply app schema + changefeed on application `DATABASE_URL`; write `session.env` as today.
-6. **API** — `GET /api/runs/latest` uses Memstream DB only. Pipeline/memory APIs use application URL from body/session.
+5. **Wire Enable** — Create/finish run on Memstream DB; apply app schema + changefeed on application `DATABASE_URL`; persist workspace connection.
+6. **API** — `GET /api/runs` uses Memstream DB; pipeline uses Connect URL / active connection.
 7. **Console** — Connect = application only. On mount: hydrate from latest Memstream run + application defaults so refresh stays “live.”
 8. **Seed** — Included in `sql/application.sql` for demo shop data.
 9. **Verify** — Enable → refresh → still live (run from Memstream DB); memory still in application DB; `.env` Memstream URL never appears in Connect.
@@ -366,7 +366,7 @@ packages/engine/          # TypeScript: profile, CDC, embed, store, discover, ru
 packages/mcp/             # Memstream MCP (search_memory) — or under apps/
 profiles/                 # commerce, saas-security, discovered
 sql/                      # memstream.sql (platform), application.sql (app+seed), vector_index.sql
-infra/                    # ec2.yaml, deployer-policy.json
+infra/                    # cdk/ (TS source), generated ec2.yaml + lambda.yaml, deployer-policy
 docs/                     # AWS.md, DEMO_SCRIPT.md
 PLAN.md
 README.md
@@ -413,8 +413,8 @@ See **Data layout & persistence** above for schema, non-goals, and step-by-step 
 | Env | `MEMSTREAM_DATABASE_URL` in `.env.example`; Connect stays application-only |
 | Schema | `sql/memstream.sql` (runs); `sql/application.sql` stays app + chunks + seed |
 | Engine | Memstream DB helpers for runs; app URL for memory/pipeline/enable |
-| Enable | Persist run to Memstream DB; schema/CDC on application DB; `session.env` for worker |
-| API | `/api/runs/latest` → Memstream DB; pipeline/memory → Connect URL |
+| Enable | Persist run to Memstream DB; schema/CDC on application DB; worker uses connection / env |
+| API | `/api/runs` → Memstream DB; pipeline → Connect URL / active connection |
 | Live | Refresh / Next restart hydrates from Memstream runs |
 | Demo data | Seed application DB for shop path |
 | Guardrail | No embeddings in Memstream DB; no Memstream URL in Connect UI; no secrets in run rows |
@@ -484,7 +484,7 @@ Don't:
 ## Open decisions
 
 - Default Next shop is **memory** without application `DATABASE_URL`; Cockroach when Connect URL is set
-- Connect prefill: `/api/defaults` reads session.env + repo `.env` (done)
+- Connect prefill: `/api/defaults` reads Memstream DB + repo `.env`
 - **Resolved:** Memstream DB via `.env` (`MEMSTREAM_DATABASE_URL`); application DB via console Connect; memory chunks stay on the application DB (see Data layout & persistence / Phase 12)
 
 ## Implementation status

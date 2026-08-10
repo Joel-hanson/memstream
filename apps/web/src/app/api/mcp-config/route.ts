@@ -1,12 +1,12 @@
 import { jsonOk } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 import { buildMemstreamMcpConfig } from "@/lib/mcp-config";
 
 export const runtime = "nodejs";
 
 /** Cursor MCP snippet — HTTP URL only (no secrets in JSON). */
 export async function GET(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req);
   if (denied) return denied;
 
   const url = new URL(req.url);

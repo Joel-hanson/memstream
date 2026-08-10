@@ -1,0 +1,21 @@
+{
+  "name": "@memstream/infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "synth": "npm run build && node ./scripts/export-templates.mjs",
+    "diff": "cdk diff",
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.210.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.1100.0",
+    "typescript": "^5.9.2",
+    "yaml": "^2.8.0"
+  }
+}

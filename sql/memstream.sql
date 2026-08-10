@@ -72,3 +72,33 @@ CREATE TABLE IF NOT EXISTS memstream_profiles (
   source STRING NOT NULL DEFAULT 'builtin', -- builtin | user
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Prior YAML for each profile save (restore / audit). Current row stays in memstream_profiles.
+CREATE TABLE IF NOT EXISTS memstream_profile_versions (
+  profile_id STRING NOT NULL,
+  version INT NOT NULL,
+  yaml STRING NOT NULL,
+  application STRING NOT NULL DEFAULT '',
+  source STRING NOT NULL DEFAULT 'user',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (profile_id, version),
+  INDEX memstream_profile_versions_created_idx (profile_id, created_at DESC)
+);
+
+-- Thin SaaS orgs (no full auth yet). Workspaces (= connections) optionally belong to an org.
+CREATE TABLE IF NOT EXISTS memstream_orgs (
+  id STRING PRIMARY KEY,
+  name STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Shareable invite codes to join an org (single-use until redeemed or expired).
+CREATE TABLE IF NOT EXISTS memstream_org_invites (
+  code STRING PRIMARY KEY,
+  org_id STRING NOT NULL,
+  label STRING,
+  expires_at TIMESTAMPTZ,
+  redeemed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  INDEX memstream_org_invites_org_idx (org_id)
+);

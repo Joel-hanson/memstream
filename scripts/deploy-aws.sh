@@ -80,6 +80,8 @@ fi
 
 STACK_NAME="${STACK_NAME:-memstream-demo}"
 DEPLOY_KEY="${DEPLOY_OBJECT_KEY:-deploy/memstream-prebuilt.tgz}"
+# Regenerate CFN from CDK (infra/cdk) before deploy
+npm run synth -w @memstream/infra
 TEMPLATE="$ROOT/infra/ec2.yaml"
 PARAMS_FILE="$(mktemp)"
 cleanup() {

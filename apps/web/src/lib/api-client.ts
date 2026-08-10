@@ -50,6 +50,30 @@ export type PublicConnection = {
 export type UpsertConnectionBody = ConnectConfig & {
   id?: string;
   name?: string;
+  org_id?: string;
+};
+
+export type OrgInfo = {
+  id: string;
+  name: string;
+  created_at?: string | null;
+};
+
+export type OrgInviteInfo = {
+  code: string;
+  org_id: string;
+  label?: string | null;
+  expires_at?: string | null;
+  redeemed_at?: string | null;
+  created_at?: string | null;
+};
+
+export type OrgResponse = {
+  configured?: boolean;
+  org?: OrgInfo | null;
+  orgs?: OrgInfo[];
+  invite?: OrgInviteInfo;
+  detail?: string;
 };
 
 export type UpsertConnectionResponse = {
@@ -77,6 +101,24 @@ export type SaveProfileResponse = {
   path?: string;
   tables?: string;
   detail?: string;
+};
+
+export type ProfileVersionInfo = {
+  profile_id: string;
+  version: number;
+  application: string;
+  source: string;
+  created_at: string;
+};
+
+export type ProfileVersionsResponse = {
+  versions?: ProfileVersionInfo[];
+  detail?: string;
+};
+
+export type RestoreProfileBody = {
+  id: string;
+  version: number;
 };
 
 export type EnableBody = {
@@ -195,6 +237,15 @@ export const consoleApi = {
         "/api/profiles/save",
         jsonInit("POST", body),
       ),
+    versions: (id: string) =>
+      apiRequest<ProfileVersionsResponse>(
+        `/api/profiles/versions?id=${encodeURIComponent(id)}`,
+      ),
+    restore: (body: RestoreProfileBody) =>
+      apiRequest<SaveProfileResponse>(
+        "/api/profiles/versions",
+        jsonInit("POST", body),
+      ),
   },
 
   runs: {
@@ -223,6 +274,25 @@ export const consoleApi = {
       ),
   },
 
+  org: {
+    get: () => apiRequest<OrgResponse>("/api/org"),
+    create: (name: string) =>
+      apiRequest<OrgResponse>(
+        "/api/org",
+        jsonInit("POST", { action: "create", name }),
+      ),
+    invite: (orgId: string, label?: string) =>
+      apiRequest<OrgResponse>(
+        "/api/org",
+        jsonInit("POST", { action: "invite", org_id: orgId, label }),
+      ),
+    join: (code: string) =>
+      apiRequest<OrgResponse & { org?: OrgInfo }>(
+        "/api/org",
+        jsonInit("POST", { action: "join", code }),
+      ),
+  },
+
   propose: (body: ProposeBody) =>
     apiRequest<ProposeResponse>("/api/propose", jsonInit("POST", body)),
 
@@ -234,5 +304,3 @@ export const consoleApi = {
 
   mcpConfig: () => apiRequest<McpConfigResponse>("/api/mcp-config"),
 };
-
-export { ApiError, type Result } from "@/lib/result";

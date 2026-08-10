@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { PIPELINE_LABELS, PRODUCT } from "@memstream/engine/naming";
 import { cn } from "@/lib/utils";
-import type { JobStatus, PipelineNode, PipelineStatus } from "@/lib/types";
+import type { PipelineNode, PipelineStatus } from "@/lib/types";
 
 type FlowCore = PipelineStatus["core"];
 
@@ -437,21 +437,4 @@ export function previewFlow(options: {
       },
     ],
   };
-}
-
-/** Which flow node is currently being brought up, from enable job logs. */
-export function activeIdFromJob(job: JobStatus | null): string | null {
-  if (!job) return null;
-  if (job.status === "succeeded") return null;
-  if (job.status === "failed") return "worker";
-  const log = (job.log || []).join("\n").toLowerCase();
-  if (log.includes("deploying") || log.includes("cloudformation")) {
-    return "worker";
-  }
-  if (log.includes("changefeed")) return "changefeed";
-  if (log.includes("schema") || log.includes("sql/schema")) return "cockroach";
-  if (log.includes("wrote session") || job.status === "running") {
-    return "memstream";
-  }
-  return "memstream";
 }

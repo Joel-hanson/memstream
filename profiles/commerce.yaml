@@ -6,6 +6,7 @@ changefeed:
     - orders
     - stock
     - tickets
+    - case_notes
   sink: s3
 
 rules:
@@ -36,6 +37,15 @@ rules:
       Support ticket {{id}} for order {{order_id}} is {{after.status}}:
       {{after.body}} ({{timestamp}})
     tags: [support, ticket, complaint]
+
+  - name: support_handoff
+    table: case_notes
+    when:
+      columns_changed: [body, author]
+    chunk_template: |
+      Case note {{id}} ({{after.author}}) for order {{order_id}} ticket {{ticket_id}}:
+      {{after.body}} ({{timestamp}})
+    tags: [support, handoff, conversation]
 
 embedding:
   model: amazon.titan-embed-text-v2:0

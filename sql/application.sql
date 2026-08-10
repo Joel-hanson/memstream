@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Support / staff agent handoffs (written by /api/shop/ask → Memstream chunks)
+CREATE TABLE IF NOT EXISTS case_notes (
+  id STRING PRIMARY KEY,
+  order_id STRING NULL REFERENCES orders (id),
+  ticket_id STRING NULL,
+  author STRING NOT NULL,
+  body STRING NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- saas-security profile
 CREATE TABLE IF NOT EXISTS users (
   id STRING PRIMARY KEY,
@@ -89,8 +99,31 @@ UPDATE customers SET name = 'Alex' WHERE id = 'c1' AND name IN ('Acme', 'c1');
 UPDATE customers SET name = 'Sam' WHERE id = 'c2' AND name IN ('Globex', 'c2');
 
 INSERT INTO orders (id, customer_id, status, sku, quantity) VALUES
+  ('90', 'c1', 'shipped', 'SKU-12', 1),
   ('100', 'c1', 'pending', 'SKU-12', 1),
   ('101', 'c2', 'pending', 'SKU-99', 1)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE orders SET note = 'Shipped 1× SKU-12 for Alex'
+WHERE id = '90' AND (note IS NULL OR note = '');
+
+INSERT INTO tickets (id, order_id, status, body) VALUES
+  (
+    't-90',
+    '90',
+    'closed',
+    'Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.'
+  )
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO case_notes (id, order_id, ticket_id, author, body) VALUES
+  (
+    'n-90',
+    '90',
+    't-90',
+    'staff',
+    'Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
+  )
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO stock (sku, warehouse_id, quantity) VALUES

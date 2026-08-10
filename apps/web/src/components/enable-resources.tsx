@@ -179,22 +179,21 @@ export function EnableResources({
               </div>
               <ProgressBar value={progressValue} max={total} />
               <p className="text-xs font-medium text-foreground">{headline}</p>
-              {job?.live === false ? (
+              {onAbandon ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 border border-border bg-background px-2.5 py-2">
                   <p className="text-[0.65rem] leading-snug text-muted-foreground">
-                    Reconnected after reload; watching saved progress. If this
-                    stalls, mark failed and retry.
+                    {job?.live === false
+                      ? "Reconnected after reload; watching saved progress. If this stalls, mark failed and retry."
+                      : "Stack may already be up while Enable is still waiting. Mark failed, then retry Enable."}
                   </p>
-                  {onAbandon ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={onAbandon}
-                    >
-                      Mark failed
-                    </Button>
-                  ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={onAbandon}
+                  >
+                    Mark failed
+                  </Button>
                 </div>
               ) : null}
             </>

@@ -1,11 +1,11 @@
 import { saveProfileYaml } from "@memstream/engine";
 import { jsonError, jsonOk, readJsonBody, webRepoRoot } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req);
   if (denied) return denied;
 
   const body = (await readJsonBody(req as never)) as {

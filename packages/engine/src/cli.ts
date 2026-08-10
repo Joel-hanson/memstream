@@ -14,6 +14,8 @@ import { runPollLoop } from "./loop.js";
 import { Indexer } from "./pipeline.js";
 import { resolveProfile } from "./profile-store.js";
 import { repoRoot } from "./console-actions.js";
+import { createShutdownController } from "./shutdown.js";
+import { closePools } from "./db.js";
 
 function envFlag(name: string): boolean {
   const v = (process.env[name] || "").toLowerCase();
@@ -186,11 +188,22 @@ Options:
     connectionId || null,
   );
   const label = `source=${sourceKind} embedder=${values.embedder} store=${storeKind}`;
+  const watch = Boolean(values.watch);
+  const shutdown = createShutdownController({
+    onSignal: (signal) => {
+      console.error(`received ${signal}, finishing current poll…`);
+    },
+  });
+  if (watch) shutdown.install();
+
   await runPollLoop(indexer, {
-    watch: Boolean(values.watch),
+    watch,
     interval: Number(values["poll-interval"] || 5),
     label,
+    shouldContinue: shutdown.shouldContinue,
   });
+
+  await closePools();
 
   if (values["dump-store"]) {
     if (!(store instanceof InMemoryMemoryStore)) {

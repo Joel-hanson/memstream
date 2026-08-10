@@ -29,6 +29,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProfileDraft, ProfileInfo } from "@/lib/types";
+import type { ProfileVersionInfo } from "@/lib/api-client";
+import { formatRelativeTime } from "@/lib/utils";
 import type { BusyAction, ConfigMode } from "./types";
 
 export function ConfigureModal({
@@ -56,6 +58,8 @@ export function ConfigureModal({
   onLoadTemplate,
   onSelectTemplateAsIs,
   onSaveProfile,
+  profileVersions,
+  onRestoreVersion,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -81,6 +85,8 @@ export function ConfigureModal({
   onLoadTemplate: () => void;
   onSelectTemplateAsIs: () => void;
   onSaveProfile: () => void;
+  profileVersions: ProfileVersionInfo[];
+  onRestoreVersion: (version: number) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -134,6 +140,47 @@ export function ConfigureModal({
                     </span>
                   </FieldDescription>
                 </Field>
+                {profileVersions.length > 0 ? (
+                  <Field>
+                    <FieldLabel>
+                      <TermHint hint="Each save that changes YAML keeps the previous snapshot (up to 20). Restore reloads that version as the current profile.">
+                        Version history
+                      </TermHint>
+                    </FieldLabel>
+                    <ul className="divide-y border text-xs">
+                      {profileVersions.map((v) => (
+                        <li
+                          key={v.version}
+                          className="flex items-center justify-between gap-2 px-2.5 py-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground">
+                              v{v.version}
+                              <span className="ml-1.5 font-normal text-muted-foreground">
+                                {v.source}
+                              </span>
+                            </p>
+                            <p className="truncate text-muted-foreground">
+                              {formatRelativeTime(v.created_at)}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            disabled={isBusy}
+                            onClick={() => onRestoreVersion(v.version)}
+                          >
+                            {busy === "restore-profile" ? (
+                              <Spinner />
+                            ) : null}
+                            Restore
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  </Field>
+                ) : null}
                 {draft ? (
                   <>
                     <RuleDraftList

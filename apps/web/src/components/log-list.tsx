@@ -147,32 +147,3 @@ export function MemoryChunkList({
     </LogList>
   );
 }
-
-/** Optional path + preview rows (shop CDC raw). */
-export function PreviewLineList({
-  items,
-  empty = "Nothing to show.",
-  className,
-  maxHeightClass = "max-h-48",
-}: {
-  items: { path: string; preview: string }[];
-  empty?: ReactNode;
-  className?: string;
-  maxHeightClass?: string;
-}) {
-  return (
-    <LogList
-      className={className}
-      empty={empty}
-      maxHeightClass={maxHeightClass}
-    >
-      {items.map((item, i) => (
-        <LogLineRow
-          key={`${item.path}-${i}`}
-          meta={item.path}
-          body={item.preview}
-        />
-      ))}
-    </LogList>
-  );
-}

@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import Link from "next/link";
 import {
   RiAddLine,
+  RiBuilding2Line,
   RiCheckLine,
   RiFileCopyLine,
   RiFlashlightLine,
@@ -204,6 +205,8 @@ export function ConsoleHeaderBar({
   isBusy,
   busy,
   runsCount,
+  org,
+  onOpenOrg,
   onRetryEnable,
   onOpenRuns,
   onOpenConfigure,
@@ -216,6 +219,8 @@ export function ConsoleHeaderBar({
   isBusy: boolean;
   busy: BusyAction;
   runsCount: number;
+  org: { id: string; name: string } | null;
+  onOpenOrg: () => void;
   onRetryEnable: () => void;
   onOpenRuns: () => void;
   onOpenConfigure: () => void;
@@ -237,6 +242,12 @@ export function ConsoleHeaderBar({
         </Link>
 
         <div className="ml-auto flex items-center gap-2">
+          <Button type="button" variant="ghost" size="sm" onClick={onOpenOrg}>
+            <RiBuilding2Line />
+            <span className="max-w-28 truncate hidden sm:inline">
+              {org?.name || "Org"}
+            </span>
+          </Button>
           {watching ? (
             <Badge variant="secondary" className="gap-1.5">
               <span className="size-1.5 animate-pulse-dot rounded-full bg-foreground" />

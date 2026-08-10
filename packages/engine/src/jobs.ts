@@ -3,14 +3,15 @@
  */
 
 import { randomBytes } from "node:crypto";
+import {
+  JOB_STEP_STATUS,
+  RUN_STATUS,
+  type JobStepStatusValue,
+  type RunStatus,
+} from "./constants.js";
 import type { MemstreamRunStep } from "./runs.js";
 
-export type JobStepStatus =
-  | "pending"
-  | "running"
-  | "done"
-  | "failed"
-  | "skipped";
+export type JobStepStatus = JobStepStatusValue;
 
 export type JobStep = {
   id: string;
@@ -22,7 +23,7 @@ export type JobStep = {
 export interface Job {
   id: string;
   kind: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: RunStatus;
   log: string[];
   steps: JobStep[];
   result: Record<string, unknown> | null;
@@ -31,12 +32,16 @@ export interface Job {
   finishedAt: number | null;
   /** Platform run id when progress is durable. */
   runId: string | null;
+  /** Set when console abandons a hung enable; background work should stop. */
+  aborted: boolean;
+  lastActivityAt: number;
   append: (line: string) => void;
   setSteps: (steps: JobStep[]) => void;
   setStep: (
     id: string,
     patch: Partial<Pick<JobStep, "status" | "detail" | "label">>,
   ) => void;
+  abort: (reason: string) => void;
 }
 
 export type PersistJobProgress = (snapshot: {
@@ -77,6 +82,7 @@ export function bindJobToRun(
   const originalAppend = job.append.bind(job);
   const originalSetSteps = job.setSteps.bind(job);
   const originalSetStep = job.setStep.bind(job);
+  const originalAbort = job.abort.bind(job);
 
   job.append = (line: string) => {
     originalAppend(line);
@@ -90,16 +96,21 @@ export function bindJobToRun(
     originalSetStep(id, patch);
     flush();
   };
+  job.abort = (reason: string) => {
+    originalAbort(reason);
+    flush();
+  };
 }
 
 export class JobStore {
   private jobs = new Map<string, Job>();
 
   create(kind: string): Job {
+    const now = Date.now() / 1000;
     const job: Job = {
       id: randomBytes(6).toString("hex"),
       kind,
-      status: "queued",
+      status: RUN_STATUS.QUEUED,
       log: [],
       steps: [],
       result: null,
@@ -107,16 +118,39 @@ export class JobStore {
       startedAt: null,
       finishedAt: null,
       runId: null,
+      aborted: false,
+      lastActivityAt: now,
       append(line: string) {
         this.log.push(line);
+        this.lastActivityAt = Date.now() / 1000;
       },
       setSteps(steps: JobStep[]) {
         this.steps = steps.map((s) => ({ ...s }));
+        this.lastActivityAt = Date.now() / 1000;
       },
       setStep(id, patch) {
         const step = this.steps.find((s) => s.id === id);
         if (!step) return;
         Object.assign(step, patch);
+        this.lastActivityAt = Date.now() / 1000;
+      },
+      abort(reason: string) {
+        if (
+          this.status === RUN_STATUS.SUCCEEDED ||
+          this.status === RUN_STATUS.FAILED
+        ) {
+          return;
+        }
+        this.aborted = true;
+        this.status = RUN_STATUS.FAILED;
+        this.error = reason;
+        this.append(`ERROR: ${reason}`);
+        this.finishedAt = Date.now() / 1000;
+        for (const step of this.steps) {
+          if (step.status === JOB_STEP_STATUS.RUNNING) {
+            step.status = JOB_STEP_STATUS.FAILED;
+          }
+        }
       },
     };
     this.jobs.set(job.id, job);
@@ -127,36 +161,59 @@ export class JobStore {
     return this.jobs.get(jobId);
   }
 
+  /** Abort an in-flight job (Enable abandon / hung waiter). */
+  abort(jobId: string, reason: string): Job | undefined {
+    const job = this.jobs.get(jobId);
+    if (!job) return undefined;
+    job.abort(reason);
+    return job;
+  }
+
   runInBackground(
     job: Job,
     fn: (job: Job) => Promise<Record<string, unknown> | void>,
   ): void {
     void (async () => {
-      job.status = "running";
+      job.status = RUN_STATUS.RUNNING;
       job.startedAt = Date.now() / 1000;
       try {
-        job.result = (await fn(job)) || {};
-        job.status = "succeeded";
+        const result = (await fn(job)) || {};
+        if (job.aborted) {
+          return;
+        }
+        job.result = result;
+        job.status = RUN_STATUS.SUCCEEDED;
         for (const step of job.steps) {
-          if (step.status === "running") step.status = "done";
-          if (step.status === "pending") step.status = "skipped";
+          if (step.status === JOB_STEP_STATUS.RUNNING) {
+            step.status = JOB_STEP_STATUS.DONE;
+          }
+          if (step.status === JOB_STEP_STATUS.PENDING) {
+            step.status = JOB_STEP_STATUS.SKIPPED;
+          }
         }
       } catch (err) {
-        job.status = "failed";
+        if (job.aborted) {
+          return;
+        }
+        job.status = RUN_STATUS.FAILED;
         job.error = err instanceof Error ? err.message : String(err);
         job.append(`ERROR: ${job.error}`);
         for (const step of job.steps) {
-          if (step.status === "running") step.status = "failed";
+          if (step.status === JOB_STEP_STATUS.RUNNING) {
+            step.status = JOB_STEP_STATUS.FAILED;
+          }
         }
       } finally {
-        job.finishedAt = Date.now() / 1000;
+        if (!job.finishedAt) {
+          job.finishedAt = Date.now() / 1000;
+        }
       }
     })();
   }
 }
 
 /** Bump when Job shape / create() methods change so Next HMR does not keep a stale singleton. */
-const STORE_VERSION = 3;
+const STORE_VERSION = 4;
 const globalKey = "__memstreamJobStore";
 const versionKey = "__memstreamJobStoreVersion";
 

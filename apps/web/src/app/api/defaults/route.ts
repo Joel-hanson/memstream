@@ -1,5 +1,5 @@
 import { jsonOk } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 import {
   loadConnectDefaults,
   publicConnectDefaults,
@@ -8,7 +8,7 @@ import {
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req);
   if (denied) return denied;
   return jsonOk(publicConnectDefaults(await loadConnectDefaults()));
 }

@@ -39,7 +39,7 @@ cp .env.example .env
 #   CLUSTER_URL='postgresql://.../defaultdb?sslmode=verify-full'
 #   CDC_S3_BUCKET=...
 #   AWS_REGION=us-east-1
-#   MEMSTREAM_WORKER_COMPUTE=lambda
+#   MEMSTREAM_WORKER_COMPUTE=lambda   # default; ec2 for self-host / demo box
 
 make setup-db
 # Paste printed memstream URL → MEMSTREAM_DATABASE_URL in .env
@@ -47,16 +47,21 @@ make setup-db
 # COCKROACH_CLUSTER_ID=… && make cockroach-ca
 
 make web
-# Connect (application URL) → Configure (commerce) → Enable (changefeed)
+# Connect — paste printed application URL
+# Configure — profile commerce
+# Enable — changefeed → S3; leave “Start managed cloud worker” on for Lambda
 
-# Worker — pick one:
-make watch-cloud     # A: laptop polls S3
-make deploy-aws       # B: EC2 (default SG is 0.0.0.0/0; optional SHOP_CIDR=YOUR_IP/32)
+# Worker — pick one (do not run two consumers on the same bucket/prefix):
+#   A  Enable with Managed Lambda (default) — no extra make target
+#   B  make watch-cloud     # laptop polls S3 (turn cloud worker off in Enable)
+#   C  make deploy-aws      # EC2 demo box (Docker required; optional SHOP_CIDR=YOUR_IP/32)
 
-make destroy-aws     # when done (EC2 only)
+make destroy-aws     # EC2 stack only
+# Lambda: delete the run in the console, or delete *-lambda in CloudFormation
 ```
 
-Video + MCP ask: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) (`make demo-reset` between takes).
+Video + MCP ask: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) (`make demo-reset` between takes).  
+Self-host runbook: [docs/SELF_HOST.md](docs/SELF_HOST.md).
 
 ```bash
 make help
@@ -72,8 +77,10 @@ make help
 | `web` | Console + shop `:3000` |
 | `setup-db` | Create `memstream` (+ empty `application`) + platform SQL; app schema via Enable |
 | `watch-cloud` | S3 → Bedrock → Cockroach (laptop) |
-| `deploy-aws` / `destroy-aws` | EC2 demo stack |
-| `demo-reset` | Reset shop + memory for rehearsal |
+| `deploy-aws` / `destroy-aws` | EC2 demo stack (Lambda via Enable, not these targets) |
+| `synth-infra` | CDK → `infra/ec2.yaml` + `infra/lambda.yaml` |
+| `demo-reset` | Full reset to demo start (shop + platform clutter + S3 CDC prefix) |
+| `demo-reset-shop` | Shop + memory only (narrow) |
 | `mcp` | Memstream MCP |
 | `test-engine` | vitest |
 
@@ -83,7 +90,7 @@ make help
 apps/web/         console + /shop
 packages/engine/  worker, CDC, shop libs
 packages/mcp/     search_memory MCP
-profiles/ sql/ docs/ examples/ scripts/ infra/
+profiles/ sql/ docs/ examples/ scripts/ infra/cdk/ infra/
 ```
 
-Design notes: [PLAN.md](PLAN.md). Target architecture: [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md).
+Design notes: [PLAN.md](PLAN.md). Target architecture: [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md). Self-host: [docs/SELF_HOST.md](docs/SELF_HOST.md).

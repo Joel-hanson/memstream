@@ -6,9 +6,6 @@ import {
   DeleteStackCommand,
   DescribeStacksCommand,
   UpdateStackCommand,
-  waitUntilStackCreateComplete,
-  waitUntilStackDeleteComplete,
-  waitUntilStackUpdateComplete,
 } from "@aws-sdk/client-cloudformation";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { spawnSync } from "node:child_process";
@@ -17,7 +14,10 @@ import { join } from "node:path";
 import { stageRepoCaCert } from "./ca-cert.js";
 import { resolveAppDatabaseUrl } from "./connections.js";
 import { upsertDeployConfigSecret } from "./deploy-secrets.js";
+import { infraTemplatePath } from "./infra-templates.js";
 import type { Job } from "./jobs.js";
+import { INFRA_TEMPLATE, WORKER_COMPUTE } from "./constants.js";
+import { waitForStackSettle } from "./stack-wait.js";
 
 export type DeployAwsOptions = {
   root: string;
@@ -110,7 +110,9 @@ function stackParameters(
     {
       ParameterKey: "MemstreamWorkerCompute",
       ParameterValue:
-        process.env.MEMSTREAM_WORKER_COMPUTE === "lambda" ? "lambda" : "ec2",
+        process.env.MEMSTREAM_WORKER_COMPUTE === WORKER_COMPUTE.LAMBDA
+          ? WORKER_COMPUTE.LAMBDA
+          : WORKER_COMPUTE.EC2,
     },
     {
       ParameterKey: "BedrockEmbedModel",
@@ -159,10 +161,7 @@ export async function deployAwsStack(
   const region = options.region || "us-east-1";
   const stackName = options.stackName || "memstream-demo";
   const deployKey = options.deployObjectKey || "deploy/memstream-prebuilt.tgz";
-  const templatePath = join(options.root, "infra", "ec2.yaml");
-  if (!existsSync(templatePath)) {
-    throw new Error(`Missing template ${templatePath}`);
-  }
+  const templatePath = infraTemplatePath(options.root, INFRA_TEMPLATE.EC2);
 
   const memstreamUrl =
     options.memstreamDatabaseUrl ||
@@ -247,10 +246,13 @@ export async function deployAwsStack(
       }),
     );
     log(options.job, "Waiting for stack create…");
-    await waitUntilStackCreateComplete(
-      { client: cfn, maxWaitTime: 900 },
-      { StackName: stackName },
-    );
+    await waitForStackSettle({
+      client: cfn,
+      stackName,
+      mode: "create",
+      maxWaitSeconds: 900,
+      job: options.job,
+    });
   } else {
     log(options.job, `Updating stack ${stackName} (status=${status})`);
     try {
@@ -263,10 +265,13 @@ export async function deployAwsStack(
         }),
       );
       log(options.job, "Waiting for stack update…");
-      await waitUntilStackUpdateComplete(
-        { client: cfn, maxWaitTime: 900 },
-        { StackName: stackName },
-      );
+      await waitForStackSettle({
+        client: cfn,
+        stackName,
+        mode: "update",
+        maxWaitSeconds: 900,
+        job: options.job,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No updates are to be performed/i.test(msg)) {
@@ -334,10 +339,13 @@ export async function deleteAwsStack(
     log(job, `Stack ${stackName} delete started`);
     return { deleted: true, waited: false };
   }
-  await waitUntilStackDeleteComplete(
-    { client: cfn, maxWaitTime: 900 },
-    { StackName: stackName },
-  );
+  await waitForStackSettle({
+    client: cfn,
+    stackName,
+    mode: "delete",
+    maxWaitSeconds: 900,
+    job,
+  });
   log(job, `Deleted stack ${stackName}`);
   return { deleted: true, waited: true };
 }

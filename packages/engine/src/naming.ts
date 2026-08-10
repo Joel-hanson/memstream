@@ -4,6 +4,11 @@
  * Technical detail can stay in secondary text / Advanced.
  */
 
+import {
+  JOB_STEP_STATUS,
+  type JobStepStatusValue,
+} from "./constants.js";
+
 export const PRODUCT = {
   brand: "Memstream",
   tagline: "Agent memory on CockroachDB",
@@ -74,10 +79,6 @@ export function resourceById(id: string): ResourceCopy | undefined {
   return RESOURCES.find((r) => r.id === id);
 }
 
-export function resourceLabel(id: string): string {
-  return resourceById(id)?.label ?? id;
-}
-
 /** Pipeline / Live map node labels (aligned with RESOURCES where possible). */
 export const PIPELINE_LABELS = {
   database: "Your database",
@@ -99,16 +100,16 @@ export type StepStatusCopy =
   | "Skipped";
 
 export function stepStatusCopy(
-  status: "pending" | "running" | "done" | "failed" | "skipped",
+  status: JobStepStatusValue,
 ): StepStatusCopy {
   switch (status) {
-    case "running":
+    case JOB_STEP_STATUS.RUNNING:
       return "Working";
-    case "done":
+    case JOB_STEP_STATUS.DONE:
       return "Ready";
-    case "failed":
+    case JOB_STEP_STATUS.FAILED:
       return "Failed";
-    case "skipped":
+    case JOB_STEP_STATUS.SKIPPED:
       return "Skipped";
     default:
       return "Waiting";

@@ -4,12 +4,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { withClientObjects } from "./db.js";
 import { MEMSTREAM_SCHEMA_SQL } from "./embedded-schema.js";
+import { RUN_STATUS, type RunStatus } from "./constants.js";
 
-export type MemstreamRunStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed";
+/** @deprecated Prefer `RunStatus` from constants — alias kept for callers. */
+export type MemstreamRunStatus = RunStatus;
+
+export { RUN_STATUS };
 
 export type MemstreamRunStep = {
   id: string;
@@ -237,6 +237,47 @@ const RUN_SELECT = `
   log, steps_json, error, created_at::text, finished_at::text
 `;
 
+function stepsLookComplete(steps: MemstreamRunStep[]): boolean {
+  if (!steps.length) return false;
+  return (
+    steps.every(
+      (s) =>
+        s.status === "done" ||
+        s.status === "skipped" ||
+        s.status === "failed",
+    ) && steps.some((s) => s.status === "done")
+  );
+}
+
+/**
+ * finishRun sets finished_at, then a lagged progress flush can overwrite
+ * status back to running. Heal that for reads/list.
+ */
+export function coalesceRunStatus(run: MemstreamRun): MemstreamRunStatus {
+  if (
+    (run.status === RUN_STATUS.RUNNING || run.status === RUN_STATUS.QUEUED) &&
+    run.finished_at &&
+    !run.error
+  ) {
+    return RUN_STATUS.SUCCEEDED;
+  }
+  if (
+    (run.status === RUN_STATUS.RUNNING || run.status === RUN_STATUS.QUEUED) &&
+    run.finished_at &&
+    run.error
+  ) {
+    return RUN_STATUS.FAILED;
+  }
+  if (
+    (run.status === RUN_STATUS.RUNNING || run.status === RUN_STATUS.QUEUED) &&
+    stepsLookComplete(run.steps) &&
+    !run.error
+  ) {
+    return RUN_STATUS.SUCCEEDED;
+  }
+  return run.status;
+}
+
 /** Hydrate a console JobStatus-shaped payload from a persisted run. */
 export function jobSnapshotFromRun(run: MemstreamRun): {
   id: string;
@@ -251,7 +292,7 @@ export function jobSnapshotFromRun(run: MemstreamRun): {
   return {
     id: run.job_id || run.id,
     kind: "enable",
-    status: run.status,
+    status: coalesceRunStatus(run),
     log: run.log || [],
     steps: run.steps || [],
     result: {
@@ -301,14 +342,6 @@ export async function createRun(
   });
 }
 
-export async function updateRunLog(
-  runId: string,
-  log: string[],
-  root = findRepoRoot(),
-): Promise<void> {
-  await updateRunProgress(runId, { log }, root);
-}
-
 /** Persist enable progress — platform runs are the durable source of truth. */
 export async function updateRunProgress(
   runId: string,
@@ -325,12 +358,17 @@ export async function updateRunProgress(
   const stepsJson =
     patch.steps !== undefined ? JSON.stringify(patch.steps) : null;
   await withClientObjects(url, async (client) => {
+    // Never regress terminal status — debounced job flushes can land after
+    // finishRun(succeeded) and would otherwise stick the UI on "Enabling…".
     await client.query(
       `
       UPDATE memstream_runs SET
         log = COALESCE($2, log),
         steps_json = COALESCE($3, steps_json),
-        status = COALESCE($4, status)
+        status = CASE
+          WHEN status IN ('succeeded', 'failed') THEN status
+          ELSE COALESCE($4, status)
+        END
       WHERE id = $1::uuid
       `,
       [runId, patch.log ?? null, stepsJson, patch.status ?? null],
@@ -341,7 +379,7 @@ export async function updateRunProgress(
 export async function finishRun(
   runId: string,
   options: {
-    status: "succeeded" | "failed";
+    status: typeof RUN_STATUS.SUCCEEDED | typeof RUN_STATUS.FAILED;
     log?: string[];
     steps?: MemstreamRunStep[];
     shopUrl?: string | null;
@@ -386,6 +424,30 @@ export async function getLatestRun(
   return runs[0] ?? null;
 }
 
+/** Persist healed status when finishRun was overwritten by a progress flush. */
+async function healRegressedRuns(
+  client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  runs: MemstreamRun[],
+): Promise<MemstreamRun[]> {
+  const out: MemstreamRun[] = [];
+  for (const run of runs) {
+    const healed = coalesceRunStatus(run);
+    if (healed !== run.status) {
+      await client.query(
+        `
+        UPDATE memstream_runs SET status = $2
+        WHERE id = $1::uuid AND status IN ('running', 'queued')
+        `,
+        [run.id, healed],
+      );
+      out.push({ ...run, status: healed });
+    } else {
+      out.push(run);
+    }
+  }
+  return out;
+}
+
 export async function listRuns(
   limit = 20,
   root = findRepoRoot(),
@@ -403,7 +465,7 @@ export async function listRuns(
       `,
       [limit],
     );
-    return result.rows.map(rowToRun);
+    return healRegressedRuns(client, result.rows.map(rowToRun));
   });
 }
 
@@ -424,7 +486,10 @@ export async function getRun(
       [runId],
     );
     if (!result.rows.length) return null;
-    return rowToRun(result.rows[0]!);
+    const [healed] = await healRegressedRuns(client, [
+      rowToRun(result.rows[0]!),
+    ]);
+    return healed ?? null;
   });
 }
 
@@ -448,7 +513,10 @@ export async function getRunByJobId(
       [jobId],
     );
     if (!result.rows.length) return null;
-    return rowToRun(result.rows[0]!);
+    const [healed] = await healRegressedRuns(client, [
+      rowToRun(result.rows[0]!),
+    ]);
+    return healed ?? null;
   });
 }
 

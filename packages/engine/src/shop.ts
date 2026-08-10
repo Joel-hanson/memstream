@@ -31,6 +31,13 @@ export interface OpenTicketInput {
   status?: string;
 }
 
+export interface AddCaseNoteInput {
+  body: string;
+  author?: string;
+  orderId?: string | null;
+  ticketId?: string | null;
+}
+
 export interface SetUserRoleInput {
   userId: string;
   role: string;
@@ -57,6 +64,18 @@ function nextTicketId(existingIds: string[]): string {
   return `t-${max + 1}`;
 }
 
+function nextCaseNoteId(existingIds: string[]): string {
+  let max = 0;
+  for (const id of existingIds) {
+    const m = /^n-(\d+)$/i.exec(id);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return `n-${max + 1}`;
+}
+
 function defaultTicketBody(order: JsonRow): string {
   const customer = customerName(String(order.customer_id ?? ""));
   const sku =
@@ -72,12 +91,14 @@ export interface Shop {
   listOrders(): Promise<JsonRow[]> | JsonRow[];
   listStock(): Promise<JsonRow[]> | JsonRow[];
   listTickets(): Promise<JsonRow[]> | JsonRow[];
+  listCaseNotes(): Promise<JsonRow[]> | JsonRow[];
   listUsers(): Promise<JsonRow[]> | JsonRow[];
   shipOrder(orderId: string): Promise<ShopActionResult> | ShopActionResult;
   setStock(sku: string, quantity: number): Promise<ShopActionResult> | ShopActionResult;
   adjustStock(sku: string, delta: number): Promise<ShopActionResult> | ShopActionResult;
   placeOrder(input: PlaceOrderInput): Promise<ShopActionResult> | ShopActionResult;
   openTicket(input: OpenTicketInput): Promise<ShopActionResult> | ShopActionResult;
+  addCaseNote(input: AddCaseNoteInput): Promise<ShopActionResult & { noteId?: string }> | (ShopActionResult & { noteId?: string });
   setUserRole(input: SetUserRoleInput): Promise<ShopActionResult> | ShopActionResult;
   listCdcFiles():
     | Promise<{ path: string; preview: string }[]>
@@ -189,6 +210,7 @@ export class InMemoryShop implements Shop {
   orders: Record<string, JsonRow> = {};
   stock: Record<string, JsonRow> = {};
   tickets: Record<string, JsonRow> = {};
+  caseNotes: Record<string, JsonRow> = {};
   users: Record<string, JsonRow> = {};
 
   constructor(cdcDir: string) {
@@ -197,6 +219,14 @@ export class InMemoryShop implements Shop {
 
   seed(): void {
     this.orders = {
+      "90": {
+        id: "90",
+        customer_id: "c1",
+        status: "shipped",
+        note: "Shipped 1× SKU-12 for Alex",
+        sku: "SKU-12",
+        quantity: 1,
+      },
       "100": {
         id: "100",
         customer_id: "c1",
@@ -216,9 +246,27 @@ export class InMemoryShop implements Shop {
     };
     this.stock = {
       "SKU-12": { sku: "SKU-12", warehouse_id: "east", quantity: 40 },
+      "SKU-21": { sku: "SKU-21", warehouse_id: "east", quantity: 18 },
+      "SKU-34": { sku: "SKU-34", warehouse_id: "west", quantity: 12 },
       "SKU-99": { sku: "SKU-99", warehouse_id: "west", quantity: 10 },
     };
-    this.tickets = {};
+    this.tickets = {
+      "t-90": {
+        id: "t-90",
+        order_id: "90",
+        status: "closed",
+        body: "Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.",
+      },
+    };
+    this.caseNotes = {
+      "n-90": {
+        id: "n-90",
+        order_id: "90",
+        ticket_id: "t-90",
+        author: "staff",
+        body: "Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.",
+      },
+    };
     this.users = {
       u1: {
         id: "u1",
@@ -249,6 +297,12 @@ export class InMemoryShop implements Shop {
 
   listTickets(): JsonRow[] {
     return Object.values(this.tickets).sort((a, b) =>
+      String(a.id).localeCompare(String(b.id)),
+    );
+  }
+
+  listCaseNotes(): JsonRow[] {
+    return Object.values(this.caseNotes).sort((a, b) =>
       String(a.id).localeCompare(String(b.id)),
     );
   }
@@ -392,6 +446,37 @@ export class InMemoryShop implements Shop {
     };
   }
 
+  addCaseNote(input: AddCaseNoteInput): ShopActionResult & { noteId: string } {
+    const body = input.body.trim();
+    if (!body) throw new ShopError("case note body required");
+    const author = (input.author || "agent").trim() || "agent";
+    const orderId = input.orderId?.trim() || null;
+    const ticketId = input.ticketId?.trim() || null;
+    if (orderId && !this.orders[orderId]) {
+      throw new ShopError(`unknown order: ${orderId}`);
+    }
+    const id = nextCaseNoteId(Object.keys(this.caseNotes));
+    const note: JsonRow = {
+      id,
+      order_id: orderId,
+      ticket_id: ticketId,
+      author,
+      body,
+    };
+    this.caseNotes[id] = note;
+    const cdcPath = emitCdcFile(this.cdcDir, {
+      table: "case_notes",
+      before: {},
+      after: note,
+      key: { id },
+    });
+    return {
+      message: `Saved case note ${id}`,
+      cdcPath,
+      noteId: id,
+    };
+  }
+
   setUserRole(input: SetUserRoleInput): ShopActionResult {
     const { userId, role } = normalizeSetUserRole(input);
     const user = this.users[userId];
@@ -472,6 +557,15 @@ export class CockroachShop implements Shop {
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
           )`);
         await client.query(`
+          CREATE TABLE IF NOT EXISTS case_notes (
+            id STRING PRIMARY KEY,
+            order_id STRING NULL,
+            ticket_id STRING NULL,
+            author STRING NOT NULL,
+            body STRING NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )`);
+        await client.query(`
           CREATE TABLE IF NOT EXISTS users (
             id STRING PRIMARY KEY,
             org_id STRING NOT NULL,
@@ -497,12 +591,34 @@ export class CockroachShop implements Shop {
         await client.query(`
           INSERT INTO stock (sku, warehouse_id, quantity) VALUES
             ('SKU-12', 'east', 40),
+            ('SKU-21', 'east', 18),
+            ('SKU-34', 'west', 12),
             ('SKU-99', 'west', 10)
           ON CONFLICT (sku) DO NOTHING`);
         await client.query(`
-          INSERT INTO orders (id, customer_id, status, sku, quantity) VALUES
-            ('100', 'c1', 'pending', 'SKU-12', 1),
-            ('101', 'c2', 'pending', 'SKU-99', 1)
+          INSERT INTO orders (id, customer_id, status, sku, quantity, note) VALUES
+            ('90', 'c1', 'shipped', 'SKU-12', 1, 'Shipped 1× SKU-12 for Alex'),
+            ('100', 'c1', 'pending', 'SKU-12', 1, NULL),
+            ('101', 'c2', 'pending', 'SKU-99', 1, NULL)
+          ON CONFLICT (id) DO NOTHING`);
+        await client.query(`
+          INSERT INTO tickets (id, order_id, status, body) VALUES
+            (
+              't-90',
+              '90',
+              'closed',
+              'Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.'
+            )
+          ON CONFLICT (id) DO NOTHING`);
+        await client.query(`
+          INSERT INTO case_notes (id, order_id, ticket_id, author, body) VALUES
+            (
+              'n-90',
+              '90',
+              't-90',
+              'staff',
+              'Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
+            )
           ON CONFLICT (id) DO NOTHING`);
         await client.query(`
           INSERT INTO users (id, org_id, email, role) VALUES
@@ -556,6 +672,20 @@ export class CockroachShop implements Shop {
       });
     } catch (err) {
       asShopError(err, "failed to list tickets");
+    }
+  }
+
+  async listCaseNotes(): Promise<JsonRow[]> {
+    await this.ensureReady();
+    try {
+      return await withClientObjects(this.conninfo, async (client) => {
+        const result = await client.query(
+          "SELECT id, order_id, ticket_id, author, body FROM case_notes ORDER BY id",
+        );
+        return result.rows;
+      });
+    } catch (err) {
+      asShopError(err, "failed to list case notes");
     }
   }
 
@@ -816,6 +946,63 @@ export class CockroachShop implements Shop {
     }
   }
 
+  async addCaseNote(
+    input: AddCaseNoteInput,
+  ): Promise<ShopActionResult & { noteId: string }> {
+    await this.ensureReady();
+    try {
+      const body = input.body.trim();
+      if (!body) throw new ShopError("case note body required");
+      const author = (input.author || "agent").trim() || "agent";
+      const orderId = input.orderId?.trim() || null;
+      const ticketId = input.ticketId?.trim() || null;
+
+      const note = await withClientObjects(this.conninfo, async (client) => {
+        if (orderId) {
+          const found = await client.query(
+            "SELECT id FROM orders WHERE id = $1",
+            [orderId],
+          );
+          if (!found.rows[0]) throw new ShopError(`unknown order: ${orderId}`);
+        }
+        const ids = await client.query("SELECT id FROM case_notes");
+        const id = nextCaseNoteId(
+          (ids.rows as JsonRow[]).map((r) => String(r.id)),
+        );
+        await client.query(
+          `INSERT INTO case_notes (id, order_id, ticket_id, author, body, updated_at)
+           VALUES ($1, $2, $3, $4, $5, now())`,
+          [id, orderId, ticketId, author, body],
+        );
+        return {
+          id,
+          order_id: orderId,
+          ticket_id: ticketId,
+          author,
+          body,
+        };
+      });
+
+      let cdcPath: string | undefined;
+      if (this.alsoEmitLocal && this.cdcDir) {
+        cdcPath = emitCdcFile(this.cdcDir, {
+          table: "case_notes",
+          before: {},
+          after: note,
+          key: { id: note.id },
+        });
+      }
+
+      return {
+        message: `Saved case note ${note.id} in Cockroach`,
+        cdcPath,
+        noteId: note.id,
+      };
+    } catch (err) {
+      asShopError(err, "failed to save case note");
+    }
+  }
+
   async setUserRole(input: SetUserRoleInput): Promise<ShopActionResult> {
     await this.ensureReady();
     const { userId, role } = normalizeSetUserRole(input);
@@ -863,7 +1050,7 @@ export class CockroachShop implements Shop {
   }
 }
 
-const shopKey = "__memstreamShop_v3";
+const shopKey = "__memstreamShop_v4";
 
 export function getShop(options?: {
   cdcDir?: string;
@@ -889,7 +1076,9 @@ export function getShop(options?: {
   if (
     cached?._key === key &&
     typeof cached.listUsers === "function" &&
-    typeof cached.setUserRole === "function"
+    typeof cached.setUserRole === "function" &&
+    typeof cached.addCaseNote === "function" &&
+    typeof cached.listCaseNotes === "function"
   ) {
     return cached;
   }
@@ -909,10 +1098,4 @@ export function getShop(options?: {
   shop._key = key;
   g[shopKey] = shop;
   return shop;
-}
-
-/** Always in-memory (local CDC files). */
-export function getMemoryShop(cdcDir = "data/cdc/inbox"): InMemoryShop {
-  const shop = getShop({ cdcDir, backend: "memory" });
-  return shop as InMemoryShop;
 }

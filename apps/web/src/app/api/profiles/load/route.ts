@@ -1,11 +1,11 @@
 import { loadProfileDraft } from "@memstream/engine";
 import { jsonError, jsonOk, webRepoRoot } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req);
   if (denied) return denied;
 
   const path = new URL(req.url).searchParams.get("path") || "";

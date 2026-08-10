@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./constants": {
+      "types": "./dist/constants.d.ts",
+      "import": "./dist/constants.js"
+    },
     "./naming": {
       "types": "./dist/naming.d.ts",
       "import": "./dist/naming.js"
@@ -39,6 +43,7 @@
     "@aws-sdk/client-s3": "^3.864.0",
     "@aws-sdk/client-secrets-manager": "^3.1106.0",
     "@aws-sdk/credential-providers": "^3.864.0",
+    "cockatiel": "^4.0.0",
     "esbuild": "^0.25.8",
     "pg": "^8.16.3",
     "yaml": "^2.8.0"

@@ -5,6 +5,29 @@
 **Stage**: Hackathon MVP → Production-ready product  
 **Tech Stack**: TypeScript, Next.js 15, React 19, CockroachDB, AWS (S3, Bedrock, EC2)
 
+> **Status (2026-08-08):** Locked product calls and what’s shipped live in [`TARGET_ARCHITECTURE.md`](./TARGET_ARCHITECTURE.md). This file remains the original review dump; checkmarks below mark progress against it.
+
+### Implementation status (vs this review)
+
+| Item | Status |
+| --- | --- |
+| Console feature split (Issue #1) | ✅ Partial — UI in `features/console/`; orchestrator still large (Zustand rewrite backlog) |
+| Fragmented state (Issue #2) | ✅ Done — `PlatformState`; runs DB SoT; `session.env` retired |
+| Dual DB / multi-tenancy model | ✅ Clarified — keep split; orgs + workspace (`connection_id`) |
+| Secrets in CFN params | ✅ Done — Secrets Manager `ConfigSecretArn` |
+| DB connection pooling | ✅ Done — pooled `withClient*` in `db.ts` |
+| `/api/health` | ✅ Done |
+| Graceful CLI shutdown | ✅ Done — SIGINT/SIGTERM + `closePools` |
+| CDK migrate (Task 3.2) | ✅ Done — `infra/cdk` synth → committed `infra/*.yaml` (do **not** delete YAML) |
+| Retry + circuit breakers (Task 2.3) | ✅ Done — cockatiel on Bedrock + S3 |
+| API rate limiting (Task 2.3) | ✅ Done — `guardConsoleApi` / `checkRateLimit` |
+| Env validation (Quick Win #5) | ✅ Done — `apps/web/src/lib/env.ts` (zod) |
+| Magic strings | ✅ Done — `packages/engine/src/constants.ts` (`RUN_STATUS`, `WORKER_COMPUTE`, …) |
+| Typed API client | ✅ Done |
+| AES key via AWS KMS | ❌ Backlog |
+| Zustand console state | ❌ Backlog |
+| Observability (Task 2.2) | ❌ Backlog (pino / metrics / Sentry) |
+
 ---
 
 ## Executive Summary
@@ -13,16 +36,16 @@
 - ✅ Successfully migrated from Python to TypeScript
 - ✅ Clean domain separation with monorepo structure
 - ✅ Working end-to-end with real AWS infrastructure
-- ⚠️ **CRITICAL**: 2,620-line React component (`console-app.tsx`)
-- ⚠️ **HIGH**: Fragmented state management (4 different stores)
-- ⚠️ **HIGH**: Two-database split without clear multi-tenancy model
-- ⚠️ **MEDIUM**: Infrastructure as YAML when TypeScript expertise exists
-- 🔴 **SECURITY**: Secrets in CloudFormation parameters
+- ✅ **CRITICAL (partial)**: Console split — features extracted; orchestrator remains (~1.3k lines)
+- ✅ **HIGH**: PlatformState unifies CDC / jobs / connections (`session.env` gone)
+- ✅ **HIGH**: Dual-DB kept by design; orgs + workspace on platform DB
+- ✅ **MEDIUM**: CDK source of truth; generated CFN YAML for Enable
+- ✅ **SECURITY**: Deploy secrets via Secrets Manager (not CFN param values)
 
 ### Estimated Refactoring Effort
-- **Critical fixes** (maintainability): 40-60 hours
-- **Production hardening** (reliability): 30-40 hours  
-- **Architecture evolution** (scalability): 60-80 hours
+- **Critical fixes** (maintainability): 40-60 hours — *mostly landed; Zustand optional*
+- **Production hardening** (reliability): 30-40 hours — *pool, health, shutdown done; more observability backlog*
+- **Architecture evolution** (scalability): 60-80 hours  
 - **Total**: ~150 hours over 2 months
 
 ---
@@ -43,9 +66,9 @@
 
 ## 1. Critical Issues
 
-### Issue #1: The 2,620-Line Console Component 🔴
+### Issue #1: The 2,620-Line Console Component 🔴 → ✅ PARTIAL
 
-**File**: `apps/web/src/components/console-app.tsx`
+**Status**: Feature modules under `apps/web/src/features/console/` (Connect / Configure / Enable / Live / Runs). `console-app.tsx` remains an orchestrator (~1.3k). Full Zustand provider rewrite is backlog.
 
 **Problem**:
 - Single component with 2,620 lines
@@ -122,13 +145,13 @@ apps/web/src/
     - ConsolePage.tsx            (300 lines - orchestration only)
 ```
 
-**Priority**: 🔴 CRITICAL - Do this first
+**Priority**: 🔴 CRITICAL - Do this first → ✅ PARTIAL (see status table)
 
 ---
 
-### Issue #2: Fragmented State Management 🔴
+### Issue #2: Fragmented State Management 🔴 → ✅ DONE
 
-**Problem**: State stored in 4 different places
+**Status**: `PlatformState` (`packages/engine/src/state-manager.ts`) — CDC via `cdcKeys`/`buildKeyState`, jobs via `getJob` (JobStore cache + `memstream_runs`), connections via platform DB. `session.env` no longer written.
 
 ```typescript
 // 1. In-Memory (lost on restart)
@@ -219,11 +242,9 @@ await stateManager.set('last_processed_key', cdcKey);
 const lastKey = await stateManager.get('last_processed_key');
 ```
 
-**Priority**: 🔴 CRITICAL
+**Priority**: 🔴 CRITICAL → ✅ DONE (`PlatformState`)
 
 ---
-
-### Issue #3: Dual-Database Confusion ⚠️
 
 **Current Setup**:
 ```
@@ -303,9 +324,9 @@ interface TenantWorkspace {
 
 ## 2. Architecture Problems
 
-### Problem: Infrastructure as YAML
+### Problem: Infrastructure as YAML → ✅ DONE
 
-**Current**: 418 lines of CloudFormation YAML
+**Status**: AWS CDK TypeScript is the source of truth (`infra/cdk/`). `make synth-infra` writes generated `infra/ec2.yaml` + `infra/lambda.yaml` for Enable / CloudFormation deploy. Edit stacks in CDK, not by hand in YAML. Do **not** delete the generated templates.
 ```yaml
 # infra/ec2.yaml
 AWSTemplateFormatVersion: "2010-09-09"
@@ -661,7 +682,9 @@ setProfiles(profiles);
 
 ---
 
-### Issue: Database Connection Leaks
+### Issue: Database Connection Leaks → ✅ DONE (pooling)
+
+**Status**: `packages/engine/src/db.ts` caches `pg.Pool` per URL; `withClient*` checkout/release; `closePools()` on CLI shutdown. Worker `store-cockroach` still Client-per-call by design.
 
 **Current**: Manual connection management
 ```typescript
@@ -738,13 +761,13 @@ await withTransaction(memstreamDatabaseUrl, async (client) => {
 });
 ```
 
-**Priority**: 🔴 CRITICAL
+**Priority**: 🔴 CRITICAL → ✅ DONE (pooled `withClient*`)
 
 ---
 
-### Issue: Magic Strings
+### Issue: Magic Strings → ✅ DONE
 
-**Current**: Strings everywhere
+**Status**: Shared consts in `packages/engine/src/constants.ts` (`RUN_STATUS`, `JOB_STEP_STATUS`, `WORKER_COMPUTE`, `EVENT_SOURCE`, `EMBEDDER_KIND`, `STORE_KIND`, `INFRA_TEMPLATE`) + helpers `isActiveRunStatus` / `isTerminalRunStatus`. Console re-exports via `features/console/constants`.
 ```typescript
 if (status === "succeeded") { }
 if (compute === "ec2") { }
@@ -798,13 +821,13 @@ function isComplete(status: RunStatus): boolean {
 isComplete(RUN_STATUS.SUCCEEDED); // ✅ Works
 ```
 
-**Priority**: ⚠️ LOW (nice-to-have, do during refactor)
+**Priority**: ⚠️ LOW (nice-to-have, do during refactor) → ✅ DONE
 
 ---
 
-## 4. Security Issues
+### Issue: Secrets in CloudFormation Parameters 🔴 → ✅ DONE
 
-### Issue: Secrets in CloudFormation Parameters 🔴
+**Status**: Deploy config in Secrets Manager (`memstream/<stack>/config`); CFN only gets `ConfigSecretArn`. See Track A.4 in TARGET_ARCHITECTURE.
 
 **Current**:
 ```yaml
@@ -879,7 +902,7 @@ DATABASE_URL=$(aws secretsmanager get-secret-value \
   --query SecretString --output text)
 ```
 
-**Priority**: 🔴 CRITICAL (security risk)
+**Priority**: 🔴 CRITICAL (security risk) → ✅ DONE
 
 ---
 
@@ -968,13 +991,13 @@ new cdk.CfnOutput(this, 'KmsKeyId', { value: kmsKey.keyId });
 - Audit trail in CloudTrail
 - No key in environment variables
 
-**Priority**: 🔴 CRITICAL (security improvement)
+**Priority**: 🔴 CRITICAL (security improvement) → ❌ BACKLOG (still `MEMSTREAM_SECRETS_KEY` env / AES)
 
 ---
 
-## 5. Production Readiness Gaps
+### Missing: Health Checks → ✅ DONE
 
-### Missing: Health Checks
+**Status**: `GET /api/health` — platform DB required; optional S3 `HeadBucket`; Bedrock skipped (cost).
 
 **Add to API routes**:
 
@@ -1105,11 +1128,13 @@ export async function GET() {
 - Monitoring systems (Datadog, New Relic): Poll every 30s
 - Load balancer health checks
 
-**Priority**: 🔴 CRITICAL (needed for production)
+**Priority**: 🔴 CRITICAL (needed for production) → ✅ DONE
 
 ---
 
-### Missing: Graceful Shutdown
+### Missing: Graceful Shutdown → ✅ DONE
+
+**Status**: CLI watch uses `createShutdownController` (SIGINT/SIGTERM) + `closePools()`.
 
 **Add to worker**:
 
@@ -1204,9 +1229,9 @@ await indexer.run();
 
 ---
 
-### Missing: Rate Limiting
+### Missing: Rate Limiting → ✅ DONE
 
-**Add to API routes**:
+**Status**: `apps/web/src/lib/rate-limit.ts` + `guardConsoleApi` on console routes (stricter for Enable/propose).
 
 ```typescript
 // lib/rate-limit.ts
@@ -1297,10 +1322,9 @@ export async function POST(req: NextRequest) {
 
 ---
 
-### Missing: Retry Logic & Circuit Breakers
+### Missing: Retry Logic & Circuit Breakers → ✅ DONE
 
-```typescript
-// lib/resilience.ts
+**Status**: `packages/engine/src/resilience.ts` (`resilientBedrock`, `resilientS3`) via cockatiel.
 
 import { retry, CircuitBreaker, ExponentialBackoff } from 'cockatiel';
 
@@ -1345,7 +1369,7 @@ const cdcFiles = await resilientCall.execute(async () => {
 ### Phase 1: Critical Fixes (Week 1-2)
 **Goal**: Make codebase maintainable
 
-#### Task 1.1: Break Up `console-app.tsx` (Priority 🔴)
+#### Task 1.1: Break Up `console-app.tsx` (Priority 🔴) → ✅ PARTIAL
 **Estimated**: 16-20 hours
 
 1. **Create feature folders** (2h)
@@ -1386,7 +1410,7 @@ const cdcFiles = await resilientCall.execute(async () => {
 - Each feature independently testable
 - State clearly scoped to features
 
-#### Task 1.2: Unified API Client (Priority 🔴)
+#### Task 1.2: Unified API Client (Priority 🔴) → ✅ DONE
 **Estimated**: 4-6 hours
 
 1. **Create base client** (2h)
@@ -1416,7 +1440,7 @@ const cdcFiles = await resilientCall.execute(async () => {
 - Runtime validation with Zod
 - Consistent error handling
 
-#### Task 1.3: Database Connection Management (Priority 🔴)
+#### Task 1.3: Database Connection Management (Priority 🔴) → ✅ DONE
 **Estimated**: 6-8 hours
 
 1. **Create connection pool manager** (2h)
@@ -1442,7 +1466,7 @@ const cdcFiles = await resilientCall.execute(async () => {
 - All queries use `withDb` or `withTransaction`
 - Pool metrics visible
 
-#### Task 1.4: Health Checks (Priority 🔴)
+#### Task 1.4: Health Checks (Priority 🔴) → ✅ DONE
 **Estimated**: 3-4 hours
 
 1. **Implement `/api/health`** (2h)
@@ -1469,7 +1493,7 @@ const cdcFiles = await resilientCall.execute(async () => {
 ### Phase 2: Production Hardening (Week 3-4)
 **Goal**: Make it production-ready
 
-#### Task 2.1: Secrets Management (Priority 🔴 Security)
+#### Task 2.1: Secrets Management (Priority 🔴 Security) → ✅ DONE (Secrets Manager; KMS key backlog)
 **Estimated**: 8-10 hours
 
 1. **Set up AWS Secrets Manager** (2h)
@@ -1526,8 +1550,12 @@ const cdcFiles = await resilientCall.execute(async () => {
 - Key metrics exposed
 - Errors tracked in Sentry
 
-#### Task 2.3: Resilience (Priority ⚠️)
-**Estimated**: 6-8 hours
+#### Task 2.3: Resilience (Priority ⚠️) → ✅ DONE
+
+**Status**:
+1. ✅ cockatiel retry + circuit breakers — `packages/engine/src/resilience.ts`; wrapped Bedrock embed + S3 list/get
+2. ✅ Graceful shutdown — CLI SIGINT/SIGTERM + `closePools`
+3. ✅ Rate limiting — `guardConsoleApi` (heavy budget for Enable/propose)
 
 1. **Add retry logic** (2h)
    - Install cockatiel
@@ -1625,7 +1653,9 @@ const cdcFiles = await resilientCall.execute(async () => {
 - Code reflects chosen model
 - Path to scale defined
 
-#### Task 3.2: Migrate to CDK (Priority ⚠️)
+#### Task 3.2: Migrate to CDK (Priority ⚠️) → ✅ DONE
+
+**Note**: Keep synthesized `infra/ec2.yaml` + `infra/lambda.yaml` for Enable/deploy — do not `rm` after CDK.
 **Estimated**: 12-16 hours
 
 1. **Set up CDK project** (2h)
@@ -1706,7 +1736,9 @@ const cdcFiles = await resilientCall.execute(async () => {
 
 ---
 
-## 7. Quick Wins (Do These First)
+## 7. Quick Wins (Do These First) → ✅ DONE
+
+**Status**: #1 Connect modal extracted (`features/console`); #2 constants; #3 `consoleApi`; #4 `/api/health`; #5 zod `lib/env.ts`.
 
 These can be done in **~8 hours** total for immediate improvement:
 
@@ -2708,13 +2740,13 @@ This architecture review document captures:
 - ✅ Code examples for each fix
 - ✅ Estimated effort for each task
 
-**Recommended starting point**: Phase 1, Task 1.1 (Break up `console-app.tsx`)
+**Recommended starting point**: ~~Phase 1, Task 1.1~~ — pragmatic criticals + Track A/B landed; see status table. Remaining: Zustand console rewrite, KMS for AES key, broader observability.
 
 **Expected timeline**:
-- **Week 1-2**: Critical fixes (maintainability)
-- **Week 3-4**: Production hardening (reliability)
-- **Week 5-8**: Architecture evolution (scalability)
+- **Week 1-2**: Critical fixes (maintainability) — ✅ mostly done
+- **Week 3-4**: Production hardening (reliability) — ✅ pool / health / shutdown done
+- **Week 5-8**: Architecture evolution (scalability) — in progress / backlog
 
-Save this document and reference specific sections as you implement each fix. Update the checklist as you complete tasks.
+Save this document and reference specific sections as you implement each fix. Update the checklist as you complete tasks. Canonical progress: [`TARGET_ARCHITECTURE.md`](./TARGET_ARCHITECTURE.md).
 
 Good luck with the refactoring! 🚀

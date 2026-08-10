@@ -1,12 +1,12 @@
 import { proposeFromDatabase } from "@memstream/engine";
 import { jsonError, jsonOk, readJsonBody, webRepoRoot } from "@/lib/api";
-import { requireConsoleAuth } from "@/lib/console-auth";
+import { guardConsoleApi } from "@/lib/console-auth";
 import { resolveRequestDatabaseUrl } from "@/lib/resolve-database-url";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const denied = requireConsoleAuth(req);
+  const denied = guardConsoleApi(req, { heavy: true });
   if (denied) return denied;
 
   const body = (await readJsonBody(req as never)) as {

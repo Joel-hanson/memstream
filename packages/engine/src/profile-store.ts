@@ -21,12 +21,22 @@ import {
 } from "./runs.js";
 
 const PROFILE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+/** Keep this many prior snapshots per profile (oldest pruned on save). */
+export const PROFILE_VERSION_KEEP = 20;
 
 export type StoredProfileInfo = {
   id: string;
   path: string;
   application: string;
   source: "builtin" | "user";
+};
+
+export type ProfileVersionInfo = {
+  profile_id: string;
+  version: number;
+  application: string;
+  source: string;
+  created_at: string;
 };
 
 function requirePlatformUrl(root: string): string {
@@ -39,6 +49,30 @@ function requirePlatformUrl(root: string): string {
   return url;
 }
 
+type ProfileSeed = { id: string; yamlText: string; application: string };
+
+function loadProfileSeedsFromFiles(root: string): ProfileSeed[] {
+  const profilesDir = join(root, "profiles");
+  if (!existsSync(profilesDir)) return [];
+
+  const seeds: ProfileSeed[] = [];
+  for (const file of readdirSync(profilesDir).filter((f) =>
+    f.endsWith(".yaml"),
+  )) {
+    const id = file.replace(/\.yaml$/, "");
+    if (!PROFILE_ID_RE.test(id)) continue;
+    const yamlText = readFileSync(join(profilesDir, file), "utf-8");
+    let application = id;
+    try {
+      application = parseProfileYaml(yamlText).application || id;
+    } catch {
+      continue;
+    }
+    seeds.push({ id, yamlText, application });
+  }
+  return seeds;
+}
+
 /** Seed / refresh builtin profiles from profiles/*.yaml into the platform DB. */
 export async function ensureProfilesSeeded(
   root = findRepoRoot(),
@@ -48,27 +82,12 @@ export async function ensureProfilesSeeded(
   // Caller must have applied DDL (ensureMemstreamSchema). Do not call it here —
   // that would recurse when seeding from ensureMemstreamSchema.
 
-  const profilesDir = join(root, "profiles");
-  if (!existsSync(profilesDir)) return 0;
-
   let seeded = 0;
   await withClientObjects(url, async (client) => {
-    for (const file of readdirSync(profilesDir).filter((f) =>
-      f.endsWith(".yaml"),
-    )) {
-      const id = file.replace(/\.yaml$/, "");
-      if (!PROFILE_ID_RE.test(id)) continue;
-      const yamlText = readFileSync(join(profilesDir, file), "utf-8");
-      let application = id;
-      try {
-        application = parseProfileYaml(yamlText).application || id;
-      } catch {
-        continue;
-      }
-
+    for (const seed of loadProfileSeedsFromFiles(root)) {
       const existing = await client.query(
         `SELECT source FROM memstream_profiles WHERE id = $1`,
-        [id],
+        [seed.id],
       );
       const row = existing.rows[0] as { source?: string } | undefined;
       if (row?.source === "user") continue;
@@ -82,9 +101,57 @@ export async function ensureProfilesSeeded(
            source = 'builtin',
            updated_at = now()
          WHERE memstream_profiles.source = 'builtin'`,
-        [id, yamlText, application],
+        [seed.id, seed.yamlText, seed.application],
       );
       seeded += 1;
+    }
+  });
+  return seeded;
+}
+
+/**
+ * Overwrite every profiles/*.yaml row as builtin (including former "user"
+ * edits), drop profile version history, and remove DB profiles that no
+ * longer exist under profiles/.
+ */
+export async function forceReseedProfilesFromFiles(
+  root = findRepoRoot(),
+): Promise<number> {
+  const url = memstreamDatabaseUrl(root);
+  if (!url) return 0;
+
+  const seeds = loadProfileSeedsFromFiles(root);
+  const seedIds = new Set(seeds.map((s) => s.id));
+
+  let seeded = 0;
+  await withClientObjects(url, async (client) => {
+    try {
+      await client.query(`DELETE FROM memstream_profile_versions`);
+    } catch {
+      /* table may not exist yet */
+    }
+
+    for (const seed of seeds) {
+      await client.query(
+        `INSERT INTO memstream_profiles (id, yaml, application, source, updated_at)
+         VALUES ($1, $2, $3, 'builtin', now())
+         ON CONFLICT (id) DO UPDATE SET
+           yaml = EXCLUDED.yaml,
+           application = EXCLUDED.application,
+           source = 'builtin',
+           updated_at = now()`,
+        [seed.id, seed.yamlText, seed.application],
+      );
+      seeded += 1;
+    }
+
+    const existing = await client.query(`SELECT id FROM memstream_profiles`);
+    for (const row of existing.rows as { id: string }[]) {
+      if (!seedIds.has(row.id)) {
+        await client.query(`DELETE FROM memstream_profiles WHERE id = $1`, [
+          row.id,
+        ]);
+      }
     }
   });
   return seeded;
@@ -237,6 +304,7 @@ export async function saveStoredProfile(options: {
   await ensureMemstreamSchema(root);
 
   await withClientObjects(url, async (client) => {
+    await archiveProfileIfChanged(client, profileId, text);
     await client.query(
       `INSERT INTO memstream_profiles (id, yaml, application, source, updated_at)
        VALUES ($1, $2, $3, 'user', now())
@@ -255,4 +323,137 @@ export async function saveStoredProfile(options: {
     application: loaded.application,
     tables: loaded.changefeed.tables.join(","),
   };
+}
+
+async function archiveProfileIfChanged(
+  client: {
+    query: (
+      text: string,
+      params?: unknown[],
+    ) => Promise<{ rows: Record<string, unknown>[] }>;
+  },
+  profileId: string,
+  newYaml: string,
+): Promise<void> {
+  const existing = await client.query(
+    `SELECT yaml, application, source FROM memstream_profiles WHERE id = $1`,
+    [profileId],
+  );
+  const row = existing.rows[0];
+  if (!row || row.yaml == null) return;
+  const prevYaml = String(row.yaml);
+  if (prevYaml === newYaml) return;
+
+  const max = await client.query(
+    `SELECT coalesce(max(version), 0)::int AS v
+     FROM memstream_profile_versions WHERE profile_id = $1`,
+    [profileId],
+  );
+  const next = Number(max.rows[0]?.v ?? 0) + 1;
+  await client.query(
+    `
+    INSERT INTO memstream_profile_versions
+      (profile_id, version, yaml, application, source, created_at)
+    VALUES ($1, $2, $3, $4, $5, now())
+    `,
+    [
+      profileId,
+      next,
+      prevYaml,
+      String(row.application || profileId),
+      String(row.source || "user"),
+    ],
+  );
+
+  const excess = await client.query(
+    `
+    SELECT version FROM memstream_profile_versions
+    WHERE profile_id = $1
+    ORDER BY version DESC
+    OFFSET $2
+    `,
+    [profileId, PROFILE_VERSION_KEEP],
+  );
+  for (const old of excess.rows) {
+    await client.query(
+      `DELETE FROM memstream_profile_versions
+       WHERE profile_id = $1 AND version = $2`,
+      [profileId, Number(old.version)],
+    );
+  }
+}
+
+export async function listProfileVersions(
+  profileId: string,
+  root = findRepoRoot(),
+  limit = 20,
+): Promise<ProfileVersionInfo[]> {
+  const id = profileIdFromRef(profileId);
+  if (!id || !PROFILE_ID_RE.test(id)) return [];
+  const url = memstreamDatabaseUrl(root);
+  if (!url) return [];
+  await ensureMemstreamSchema(root);
+  return withClientObjects(url, async (client) => {
+    const result = await client.query(
+      `
+      SELECT profile_id, version, application, source, created_at::text AS created_at
+      FROM memstream_profile_versions
+      WHERE profile_id = $1
+      ORDER BY version DESC
+      LIMIT $2
+      `,
+      [id, Math.min(Math.max(limit, 1), 50)],
+    );
+    return (result.rows as ProfileVersionInfo[]).map((r) => ({
+      profile_id: String(r.profile_id),
+      version: Number(r.version),
+      application: String(r.application || ""),
+      source: String(r.source || "user"),
+      created_at: String(r.created_at || ""),
+    }));
+  });
+}
+
+export async function restoreProfileVersion(options: {
+  profileId: string;
+  version: number;
+  root?: string;
+}): Promise<{ id: string; path: string; application: string; tables: string }> {
+  const id = profileIdFromRef(options.profileId);
+  if (!id || !PROFILE_ID_RE.test(id)) {
+    throw new Error("invalid profile id");
+  }
+  const version = Number(options.version);
+  if (!Number.isInteger(version) || version < 1) {
+    throw new Error("version must be a positive integer");
+  }
+  const root = options.root ?? findRepoRoot();
+  const url = requirePlatformUrl(root);
+  await ensureMemstreamSchema(root);
+
+  const yamlText = await withClientObjects(url, async (client) => {
+    const result = await client.query(
+      `
+      SELECT yaml FROM memstream_profile_versions
+      WHERE profile_id = $1 AND version = $2
+      `,
+      [id, version],
+    );
+    const row = result.rows[0];
+    if (!row?.yaml) {
+      throw new Error(`profile version not found: ${id}@${version}`);
+    }
+    return String(row.yaml);
+  });
+
+  parseProfileYaml(yamlText);
+  const raw = parseYaml(yamlText);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("stored version is not a valid profile mapping");
+  }
+  return saveStoredProfile({
+    profile: raw as Record<string, unknown>,
+    profileId: id,
+    root,
+  });
 }

@@ -78,6 +78,8 @@ printf 'prebuilt=1\nplatform=%s\n' "$PLATFORM" > "$STAGE/PREBUILT"
 
 # Lambda Enable-from-EC2: template + prebuilt zip (no Docker/esbuild on the box)
 mkdir -p "$STAGE/infra" "$STAGE/deploy"
+# Ensure generated CFN templates are fresh (CDK source of truth under infra/cdk)
+npm run synth -w @memstream/infra >&2
 cp "$ROOT/infra/lambda.yaml" "$STAGE/infra/lambda.yaml"
 if ! command -v zip >/dev/null 2>&1; then
   echo "error: zip is required to package the Lambda worker (e.g. brew install zip)" >&2

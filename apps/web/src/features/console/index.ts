@@ -1,33 +1,35 @@
-export type {
-  BusyAction,
-  ConfigMode,
-  Modal,
-  RunsFilter,
-  WorkerCompute,
-} from "./types";
+export type { BusyAction, Modal } from "./types";
 
 export {
-  ENABLE_JOB_STORAGE_KEY,
+  enableStepsComplete,
   jobFromRun,
   pickPrimaryRun,
+  profileIdFromPath,
   readStoredEnableJobId,
+  resolveRunDisplayStatus,
   runProfileLabel,
-  runStatusLabel,
   storeEnableJobId,
 } from "./helpers";
 
-export { Advanced } from "./advanced";
+export {
+  RUN_STATUS,
+  WORKER_COMPUTE,
+  isActiveRunStatus,
+  isTerminalRunStatus,
+} from "./constants";
+
 export { ConnectModal } from "./connect-modal";
 export { ConfigureModal } from "./configure-modal";
 export { DeleteRunDialog } from "./delete-run-dialog";
 export { EnableModal, SetupLogDialog } from "./enable-modal";
+export { OrgDialog } from "./org-dialog";
 export {
   ConsoleAlerts,
   EnableLogCard,
-  EnableResources,
   FlowPrimaryCta,
   LivePanel,
   RunSummaryCard,
 } from "./live-panel";
+export { EnableResources } from "@/components/enable-resources";
 export { RunsSheet } from "./runs-sheet";
 export { ConsoleHeaderBar, SetupWizard } from "./setup-wizard";

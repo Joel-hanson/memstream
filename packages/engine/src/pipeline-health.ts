@@ -29,6 +29,12 @@ export type PipelineHealth = {
 /** Seconds behind CDC before we call memory "lagging". */
 export const MEMORY_LAG_WARN_SECONDS = 120;
 
+/**
+ * Only treat lag as a warning when CDC itself is fresh.
+ * Quiet shop / waiting for writes must not look Degraded.
+ */
+export const CDC_RECENT_SECONDS = 5 * 60;
+
 export type DerivePipelineHealthInput = {
   databaseUrlSet: boolean;
   dbOk: boolean;
@@ -52,6 +58,17 @@ function parseTimeMs(iso: string | null | undefined): number | null {
   if (!iso?.trim()) return null;
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/** True when the newest CDC object is recent enough that lag is actionable. */
+export function isCdcRecent(
+  latestCdcAt: string | null,
+  nowMs = Date.now(),
+  recentSeconds = CDC_RECENT_SECONDS,
+): boolean {
+  const cdcMs = parseTimeMs(latestCdcAt);
+  if (cdcMs == null) return false;
+  return (nowMs - cdcMs) / 1000 <= recentSeconds;
 }
 
 export function computeLagSeconds(
@@ -128,6 +145,7 @@ export function derivePipelineHealth(
     input.latestChunkAt,
     nowMs,
   );
+  const cdcRecent = isCdcRecent(input.latestCdcAt, nowMs);
 
   const hasCdcPending =
     (input.s3Objects != null && input.s3Objects > 0) ||
@@ -136,9 +154,15 @@ export function derivePipelineHealth(
     hasCdcPending &&
     input.chunkCount === 0 &&
     input.changefeedRunning > 0;
+  // Lag only alarms while CDC is fresh — quiet shop stays Healthy/Idle.
   const lagging =
-    workerBehind ||
-    (lagSeconds != null && lagSeconds >= MEMORY_LAG_WARN_SECONDS);
+    cdcRecent &&
+    (workerBehind ||
+      (lagSeconds != null && lagSeconds >= MEMORY_LAG_WARN_SECONDS));
+  const quietBacklog =
+    !cdcRecent &&
+    lagSeconds != null &&
+    lagSeconds >= MEMORY_LAG_WARN_SECONDS;
 
   let memory: PipelineHealth["memory"];
   if (!input.dbOk) {
@@ -161,10 +185,8 @@ export function derivePipelineHealth(
       last_processed_at: input.lastProcessedAt,
       detail:
         input.chunkCount === 0
-          ? "CDC objects waiting — worker may be behind"
-          : lagSeconds != null
-            ? `Memory ~${lagSeconds}s behind CDC`
-            : "Memory lagging behind CDC",
+          ? "Live changes are waiting — memory worker may be behind"
+          : "Newer DB changes aren't in memory yet",
     };
   } else if (input.chunkCount > 0) {
     memory = {
@@ -174,10 +196,9 @@ export function derivePipelineHealth(
       latest_cdc_at: input.latestCdcAt,
       processed_keys: input.processedKeys,
       last_processed_at: input.lastProcessedAt,
-      detail:
-        lagSeconds != null && lagSeconds > 0
-          ? `Up to date (~${lagSeconds}s lag)`
-          : "Up to date",
+      detail: quietBacklog
+        ? "Quiet — no recent DB writes"
+        : "Up to date",
     };
   } else if (!input.bucketSet) {
     memory = {
@@ -188,6 +209,16 @@ export function derivePipelineHealth(
       processed_keys: input.processedKeys,
       last_processed_at: input.lastProcessedAt,
       detail: "Set CDC bucket to measure lag",
+    };
+  } else if (hasCdcPending && !cdcRecent) {
+    memory = {
+      status: "idle",
+      lag_seconds: lagSeconds,
+      latest_chunk_at: input.latestChunkAt,
+      latest_cdc_at: input.latestCdcAt,
+      processed_keys: input.processedKeys,
+      last_processed_at: input.lastProcessedAt,
+      detail: "Quiet — waiting for shop activity",
     };
   } else {
     memory = {

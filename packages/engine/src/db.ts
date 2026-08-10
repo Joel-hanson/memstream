@@ -1,16 +1,40 @@
-/** Shared pg client helper. */
+/** Shared pg helpers — pooled connections for the control-plane hot path. */
 
 import pg from "pg";
 import { normalizeConninfo, type SqlClient } from "./store-cockroach.js";
 
-const { Client } = pg;
+const { Pool } = pg;
+
+const pools = new Map<string, pg.Pool>();
+
+function getPool(databaseUrl: string): pg.Pool {
+  const key = normalizeConninfo(databaseUrl);
+  let pool = pools.get(key);
+  if (!pool) {
+    pool = new Pool({
+      connectionString: key,
+      max: 8,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 15_000,
+    });
+    pools.set(key, pool);
+  }
+  return pool;
+}
+
+/** Close all cached pools (CLI shutdown / tests). */
+export async function closePools(): Promise<void> {
+  const pending = [...pools.values()].map((p) => p.end());
+  pools.clear();
+  await Promise.all(pending);
+}
 
 export async function withClient<T>(
   databaseUrl: string,
   fn: (client: SqlClient) => Promise<T>,
 ): Promise<T> {
-  const client = new Client({ connectionString: normalizeConninfo(databaseUrl) });
-  await client.connect();
+  const pool = getPool(databaseUrl);
+  const client = await pool.connect();
   const wrapped: SqlClient = {
     query: async (text, params) => {
       const result = await client.query({
@@ -20,12 +44,14 @@ export async function withClient<T>(
       });
       return { rows: result.rows as unknown[][] };
     },
-    end: () => client.end(),
+    end: async () => {
+      /* pooled — release via finally */
+    },
   };
   try {
     return await fn(wrapped);
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -38,8 +64,8 @@ export async function withClientObjects<T>(
     ) => Promise<{ rows: Record<string, unknown>[]; fields: { name: string }[] }>;
   }) => Promise<T>,
 ): Promise<T> {
-  const client = new Client({ connectionString: normalizeConninfo(databaseUrl) });
-  await client.connect();
+  const pool = getPool(databaseUrl);
+  const client = await pool.connect();
   try {
     return await fn({
       query: async (text, params) => {
@@ -51,6 +77,6 @@ export async function withClientObjects<T>(
       },
     });
   } finally {
-    await client.end();
+    client.release();
   }
 }

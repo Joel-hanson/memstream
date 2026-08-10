@@ -13,8 +13,13 @@ import type { Embedder, EventSource, MemoryStore } from "./ports.js";
 import type { Profile } from "./profile.js";
 import { FilesystemEventSource } from "./source-filesystem.js";
 import { S3EventSource } from "./source-s3.js";
-import { buildKeyState } from "./state.js";
+import { getPlatformState } from "./state-manager.js";
 import { CockroachMemoryStore } from "./store-cockroach.js";
+import {
+  EMBEDDER_KIND,
+  EVENT_SOURCE,
+  STORE_KIND,
+} from "./constants.js";
 
 export function buildEmbedder(
   kind: string,
@@ -22,10 +27,10 @@ export function buildEmbedder(
   options: { region?: string } = {},
 ): Embedder {
   const k = kind.toLowerCase();
-  if (k === "fake") {
+  if (k === EMBEDDER_KIND.FAKE) {
     return new FakeEmbedder(profile.embedding.dimensions);
   }
-  if (k === "bedrock") {
+  if (k === EMBEDDER_KIND.BEDROCK) {
     return new BedrockEmbedder({
       modelId:
         profile.embedding.model ||
@@ -45,12 +50,12 @@ export function buildStore(
   options: { databaseUrl?: string; connectionId?: string | null } = {},
 ): MemoryStore {
   const k = kind.toLowerCase();
-  if (k === "memory") {
+  if (k === STORE_KIND.MEMORY) {
     return new InMemoryMemoryStore({
       connectionId: options.connectionId,
     });
   }
-  if (k === "cockroach") {
+  if (k === STORE_KIND.COCKROACH) {
     const url = options.databaseUrl || process.env.DATABASE_URL;
     if (!url) {
       throw new Error("DATABASE_URL is required for --store cockroach");
@@ -78,19 +83,19 @@ export async function buildEventSource(
   } = {},
 ): Promise<EventSource> {
   const k = kind.toLowerCase();
-  if (k === "jsonl") {
+  if (k === EVENT_SOURCE.JSONL) {
     if (!options.eventsFile) {
       throw new Error("--events is required for --source jsonl");
     }
     return new FakeEventSource(loadEventsJsonl(options.eventsFile));
   }
-  if (k === "filesystem") {
+  if (k === EVENT_SOURCE.FILESYSTEM) {
     const inbox =
       options.eventsDir ||
       process.env.MEMSTREAM_EVENTS_DIR ||
       "data/cdc/inbox";
-    const state = await buildKeyState({
-      source: "filesystem",
+    const state = await getPlatformState(options.root).cdcKeys({
+      source: EVENT_SOURCE.FILESYSTEM,
       connectionId: options.connectionId,
       stateFile: options.stateFile,
       root: options.root,
@@ -98,15 +103,15 @@ export async function buildEventSource(
     });
     return new FilesystemEventSource(inbox, state);
   }
-  if (k === "s3") {
+  if (k === EVENT_SOURCE.S3) {
     const bucket = options.s3Bucket || process.env.CDC_S3_BUCKET;
     if (!bucket) {
       throw new Error("CDC_S3_BUCKET or --s3-bucket is required for --source s3");
     }
     const prefix =
       options.s3Prefix || process.env.CDC_S3_PREFIX || "cdc/";
-    const state = await buildKeyState({
-      source: "s3",
+    const state = await getPlatformState(options.root).cdcKeys({
+      source: EVENT_SOURCE.S3,
       connectionId: options.connectionId,
       bucket,
       prefix,

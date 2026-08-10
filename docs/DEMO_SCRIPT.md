@@ -2,7 +2,7 @@
 
 Print the talk track. Keep it next to the keyboard. About three minutes on camera.
 
-Story: ship an order, open a complaint ticket, then let the agent explain why Alex is upset.
+Story: Memstream is the product (connect, configure, enable, live memory). The shop is only traffic: Alex had a late Field Lamp once; today a new order ships damaged; Support leaves a handoff; Staff asks memory plus SQL.
 
 Cloud setup: [AWS.md](AWS.md). Overview: [README](../README.md).
 
@@ -13,7 +13,7 @@ Cloud setup: [AWS.md](AWS.md). Overview: [README](../README.md).
 Hybrid ask: Memstream `search_memory` + Cockroach Cloud MCP (SQL).
 
 1. Keep `make web` running.
-2. **Copy Memstream MCP** in Live or `/shop` → Cursor Settings → MCP:
+2. **Copy Memstream MCP** in Live or shop Ops tools → Cursor Settings → MCP:
 
 ```json
 {
@@ -33,112 +33,201 @@ Alternatives: `make mcp` (`:8765`) or `make mcp-stdio`.
 ## Before you hit record
 
 - [ ] `make web` is running (console + shop)
-- [ ] Cloud path is live (changefeed on orders, stock, tickets; worker on EC2/Lambda or `make watch-cloud`)
-- [ ] Cursor has Memstream MCP and Cockroach Cloud MCP
-- [ ] Profile is `commerce` (Configure / Enable)
-- [ ] Reset:
+- [ ] Cloud path is live (changefeed on orders, stock, tickets, **case_notes**; worker on EC2/Lambda or `make watch-cloud`)
+- [ ] If you just pulled `case_notes` into `commerce`, **re-Enable** once so the feed includes it
+- [ ] Cursor has Memstream MCP and Cockroach Cloud MCP (Path B / backup)
+- [ ] Profile is `commerce` (Configure / Enable already done once)
+- [ ] Reset (re-embeds Alex’s past order 90 into memory via Bedrock):
 
 ```bash
 make demo-reset
 ```
 
-- [ ] On `/shop`, order 100 is pending for SKU-12
-- [ ] Live shows few or no recent demo chunks
+- [ ] On `/shop`, order 100 is pending for SKU-12; order 90 shows shipped (backstory)
+- [ ] Live shows a few **history** chunks (order 90 / t-90 / n-90), not clutter from a prior take
+- [ ] Rehearse chunk lag after Ship / Report damage / Support ask
 
 Bad take? `make demo-reset` again, wait for Live to settle, restart from Beat 1.
 
 ---
 
-## What to show
+## What to show (Memstream first)
 
-| Beat | Window |
-| --- | --- |
-| Hook | Live console |
-| App + drama | `/shop` |
-| Memory | Live console (new chunks) |
-| Wow | Cursor chat |
-| Close | Live + agent answer side by side |
+| Beat | Window | Job |
+| --- | --- | --- |
+| Hook | Live console | Name the product; history chunks already there |
+| Product | Live: Configure + Enable | Platform, not the shop |
+| Traffic | `/shop` (short) | Buy → Ship → damage → Support handoff |
+| Receipt | Live console | New ship / ticket / case_notes chunks |
+| Wow | Staff **Ask the agent** | Memory + SQL (frame as Memstream) |
+| Close | Live console | Chunks + one line; leave on Memstream |
+
+Shop is proof load. If you muted the audio, Live should still feel like half the video.
+
+Skip Flaticon / avatar slides. Use Shop / Staff tabs; say "as Alex" / "as staff" if you need labels.
+
+---
+
+## Say this on camera (cue card)
+
+Print this. Stage directions stay silent. Prefer cuts over dead air while waiting for chunks.
+
+**0:00 · Live (history chunk: order 90 / late delivery)**
+
+This is Memstream. Apps keep writing to CockroachDB. Agents usually get a stale copy. We turn those writes into live agent memory in the same database, including past cases, running on AWS.
+
+**0:15 · Configure, then Enable (flash only; do not re-run a long Enable)**
+
+Customer connects their Cockroach app database, configures what to remember from their schema (here, commerce: orders, stock, tickets, case notes), and enables the fabric. Memory stays next to their tables.
+
+Back on Live: status is live. These chunks are already from Alex’s earlier late Field Lamp.
+
+**0:40 · Shop (traffic only; keep it moving)**
+
+Quick proof write. As Alex: buy another Field Lamp. That row is in Cockroach.
+
+As staff: ship it.
+
+As Alex again: lamp arrives damaged. Open a damage report and ask Support. Support leaves a handoff in case notes. Memstream indexes that with the order and ticket story.
+
+**1:15 · Live (wait for new chunks)**
+
+Receipt. Ship, ticket, handoff chunks land here. Bedrock embeds. Vector memory in Cockroach beside the app data. No separate vector database.
+
+Optional glance: `VECTOR INDEX` on `agent_memory_chunks`.
+
+**1:40 · Staff · Ask the agent (still the Memstream ask path)**
+
+*(click: Why is Alex upset about the Field Lamp?)*
+
+The agent searches Memstream change memory (prior late delivery plus today’s damage), then checks live SQL.
+
+*(click: Where did we leave off on Alex's Field Lamp case?)*
+
+Staff picks up from the handoff. Memory has where the case left off. SQL has the live order.
+
+**2:40 · cut back to Live**
+
+Memstream is the live memory layer on Cockroach. AWS runs the pipeline. Agents answer what happened over time, not just what the row says right now.
+
+Stop. No architecture slides. No tear-down on camera.
 
 ---
 
 ## Talk track
 
-Say the quoted lines out loud.
+Same words as the cue card, with screen notes.
 
-### Beat 0. Hook (0:00-0:20)
+### Beat 0. Hook (0:00-0:15)
+
+Screen: Live console. Point at a history chunk (order 90 or late-delivery ticket).
+
+> "This is Memstream. Apps keep writing to CockroachDB. Agents usually get a stale copy. We turn those writes into live agent memory in the same database, including past cases, running on AWS."
+
+Skip S3 for now.
+
+### Beat 1. Product (0:15-0:40)
 
 Screen: Live console
 
-> "Apps keep writing to CockroachDB. Agents usually get a stale copy. Memstream turns those writes into live agent memory in the same database, running on AWS."
+Action (already enabled is fine):
 
-Point at live status or recent chunks. Skip S3 for now.
+1. Open **Configure**. Show `commerce` and remembered tables (orders, stock, tickets, case_notes).
+2. Close. Open **Enable**. One CTA / live status. Five seconds max on any job log.
+3. Back to Live. Point at status and history chunks.
 
-### Beat 1. The app (0:20-0:50)
+> "Customer connects their Cockroach app database, configures what to remember from their schema (here, commerce: orders, stock, tickets, case notes), and enables the fabric. Memory stays next to their tables."
 
-Screen: http://127.0.0.1:3000/shop
+> "Back on Live: status is live. These chunks are already from Alex’s earlier late Field Lamp."
 
-> "This is a normal shop. Alex has an order for SKU-12. When we ship it, that write goes straight into Cockroach."
+### Beat 2. Traffic (0:40-1:15)
 
-Action: ship order 100. Wait until the shop banner or Live shows it landed.
+Screen: http://127.0.0.1:3000/shop. Keep storefront time short.
 
-> "Production status just changed."
+> "Quick proof write. As Alex: buy another Field Lamp. That row is in Cockroach."
 
-### Beat 2. The drama (0:50-1:20)
+Action: **Buy** on Field Lamp (or use seeded order 100).
 
-Screen: shop, open complaint
+> "As staff: ship it."
 
-> "Shipping is only half of it. Alex opens a ticket: SKU-12 arrived damaged."
+Action: **Staff** → **Ship**.
 
-Action: click Open complaint ticket.
+> "As Alex again: lamp arrives damaged. Open a damage report and ask Support. Support leaves a handoff in case notes. Memstream indexes that with the order and ticket story."
 
-> "You get three events: ship, inventory, complaint. SQL shows current state. Memory is what tells you what happened."
+Action: **Shop** → **Report damage**. Support → "My lamp arrived damaged — what's going on?"
 
-### Beat 3. Memory (1:20-1:40)
+### Beat 3. Receipt (1:15-1:40)
 
-Screen: Live console, new chunks
+Screen: Live console. New chunks (ship, ticket, case note). Hold on them appearing.
 
-> "Memstream wrote those changes into Cockroach vector memory. Bedrock embeds them. They sit next to the app tables, so you do not need a separate vector database."
+> "Receipt. Ship, ticket, handoff chunks land here. Bedrock embeds. Vector memory in Cockroach beside the app data. No separate vector database."
 
 Optional: five seconds on `VECTOR INDEX` for `agent_memory_chunks`.
 
-### Beat 4. The wow (1:40-2:40)
+If chunks are slow: say the line once, wait, do not debug on camera.
 
-Screen: Cursor chat. Use **Copy ask prompt** on the shop, or paste:
+### Beat 4. Wow (1:40-2:40)
+
+Screen: **Staff** tab → **Ask the agent**. Frame this as the Memstream ask, not a shop feature tour.
+
+First click:
 
 ```text
-Why is Alex upset about SKU-12?
-1) Call Memstream search_memory first and cite the chunks.
-2) Then use Cockroach Cloud MCP SQL to confirm the live order 100 status, SKU-12 stock, and any ticket for that order.
-Answer in 3 short bullets: what happened, what memory shows, what SQL confirms.
+Why is Alex upset about the Field Lamp?
 ```
 
 While it runs:
 
-> "The agent hits Cockroach twice: semantic search over the change story, then SQL to check the live rows."
+> "The agent searches Memstream change memory (prior late delivery plus today’s damage), then checks live SQL."
 
 On camera:
 
-- [ ] Cites the ticket or ship memory (Alex, damaged, order 100)
+- [ ] Cites past history (order 90 / late delivery) and/or today’s ticket
 - [ ] Confirms with SQL (shipped, ticket, and/or stock)
-- [ ] Does more than "order 100 is shipped"
+- [ ] Memory citations are expanded (RAG visible)
+
+Then click:
+
+```text
+Where did we leave off on Alex's Field Lamp case?
+```
+
+> "Staff picks up from the handoff. Memory has where the case left off. SQL has the live order."
+
+Honest framing: in-product ask over memory search + SQL. Do not say "same path as Cursor" unless you cut to Cursor (Path B).
+
+**If Staff ask is empty or wrong:** cut, use Extra prompts, or Path B.
 
 ### Beat 5. Close (2:40-3:00)
 
-Screen: Live chunks and the agent answer together
+Screen: cut back to Live (chunks / case_notes visible). Brief flash of the staff answer is fine; end on Live.
 
-> "So Cockroach is the persistent memory layer, AWS runs the live pipeline, and the agent can answer what happened, not only what the row looks like right now."
+> "Memstream is the live memory layer on Cockroach. AWS runs the pipeline. Agents answer what happened over time, not just what the row says right now."
 
 Stop. No architecture slides after this.
 
 ---
 
-## Optional Path B (Q&A)
+## Optional Path B (Q&A / backup)
 
-Same shop, `commerce` profile. Skip in the hero take unless you have time.
+Same `commerce` profile. Skip in the hero take unless Staff chat fails or a judge asks.
 
-1. `/shop` → **Drop SKU-12 by 1** once or twice.
+In Cursor, with Memstream MCP + Cockroach Cloud MCP:
+
+```text
+Why is Alex upset about the Field Lamp?
+1) Call Memstream search_memory first and cite the chunks.
+2) Then use Cockroach Cloud MCP SQL to confirm order 100, tickets, and SKU-12 stock.
+Answer in short bullets: what memory shows, what SQL confirms.
+```
+
+> "Same hybrid idea over MCP: Memstream for change memory, Cockroach for exact rows."
+
+### Optional similarity beat (only if time)
+
+1. **Staff** → drop Field Lamp stock once or twice.
 2. Wait for an inventory chunk in Live.
-3. **Copy similarity ask**, or:
+3. Staff Agent or Cursor:
 
 ```text
 Have we seen stock drops like SKU-12 before?
@@ -155,20 +244,34 @@ Answer in 2 short bullets: what memory shows, what SQL confirms.
 
 ## Extra prompts
 
-**Backup if Beat 4 fails:**
+**Backup if Beat 4 fails (Staff):**
+
+```text
+What happened around order 100 recently (shipping and support)?
+```
+
+**Backup if Beat 4 fails (Cursor):**
 
 ```text
 What happened around order 100 recently (shipping and support)?
 Use search_memory, cite chunk text, then confirm with SQL.
 ```
 
-**SQL only (no memory):**
+**Resume backup:**
+
+```text
+Where did we leave off on Alex's Field Lamp case?
+Use search_memory for case_notes and tickets, then confirm with SQL.
+```
+
+**SQL only (proves the gap; do not end here):**
 
 > What is the current status of order 100 in `orders`?  
 > How many units of SKU-12 are in `stock`?  
-> List open tickets for order 100.
+> List open tickets for order 100.  
+> List case_notes for order 100.
 
-Then cut, `make demo-reset`, re-take from Beat 1.
+Then cut, `make demo-reset`, re-take from Beat 2.
 
 ---
 
@@ -177,12 +280,25 @@ Then cut, `make demo-reset`, re-take from Beat 1.
 - Long Enable or CloudFormation logs (five seconds max if you must)
 - `.env`, passwords, full YAML
 - Debugging a broken changefeed live
+- Flaticon / avatar slides for Alex vs staff
+- Lingering on Acme Supply branding (shop is traffic)
+- Claiming Cursor/MCP while only showing Staff chat
 
 ## Rehearsal
 
 ```bash
 make demo-reset
-# → /shop: ship 100 → open ticket → copy ask
-# → optional: drop SKU-12 → copy similarity ask
-# → optional: promote u1 → copy role-change ask
+# → Live: history chunks (90 / t-90 / n-90)
+# → Live: flash Configure + Enable
+# → Shop (fast): Buy → Ship → Report damage → Support ask
+# → Live: wait for new chunks
+# → Staff: “Why is Alex upset…” → “Where did we leave off…”
+# → Close on Live
+# → optional Cursor MCP / stock-drop ask
 ```
+
+## Devpost (text, not on camera)
+
+- **Cockroach:** Distributed Vector Indexing (`agent_memory_chunks`); Cloud Managed MCP (SQL); Memstream MCP `search_memory`
+- **AWS:** S3 (changefeed sink), Bedrock (embeddings), Lambda and/or EC2 (worker)
+- **Production shape:** memory stays in the customer application DB; console Connect stores encrypted connection pointers; managed worker on AWS

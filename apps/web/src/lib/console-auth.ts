@@ -4,6 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonError, webRepoRoot } from "@/lib/api";
+import { getEnv } from "@/lib/env";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
@@ -30,6 +32,7 @@ let warnedOpen = false;
 /** Console token from env or repo .env (empty = auth off for local DX). */
 export function consoleToken(root = webRepoRoot()): string {
   return (
+    getEnv().MEMSTREAM_CONSOLE_TOKEN ||
     process.env.MEMSTREAM_CONSOLE_TOKEN?.trim() ||
     parseEnvFile(join(root, ".env")).MEMSTREAM_CONSOLE_TOKEN?.trim() ||
     ""
@@ -65,4 +68,17 @@ export function requireConsoleAuth(req: Request): Response | null {
     return jsonError("Unauthorized (set Authorization: Bearer …)", 401);
   }
   return null;
+}
+
+/**
+ * Auth + rate limit for console APIs.
+ * @param heavy Tighter budget for Enable / propose.
+ */
+export function guardConsoleApi(
+  req: Request,
+  options: { heavy?: boolean } = {},
+): Response | null {
+  const denied = requireConsoleAuth(req);
+  if (denied) return denied;
+  return checkRateLimit(req, Boolean(options.heavy));
 }

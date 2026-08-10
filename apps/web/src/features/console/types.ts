@@ -5,10 +5,12 @@ export type BusyAction =
   | "propose"
   | "load-profile"
   | "save-profile"
+  | "restore-profile"
   | "enable"
   | "refresh"
   | "profiles"
   | "delete"
+  | "org"
   | null;
 
 export type RunsFilter = "all" | "live" | "failed";

@@ -1,4 +1,4 @@
-.PHONY: help install-js test-engine demo-local demo-reset shop watch-cloud changefeed-dry changefeed propose mcp mcp-stdio web setup-db deploy-aws destroy-aws cockroach-ca
+.PHONY: help install-js test-engine demo-local demo-reset demo-reset-shop watch-cloud changefeed-dry changefeed mcp mcp-stdio web setup-db deploy-aws destroy-aws logs cockroach-ca synth-infra cdk-diff
 
 .DEFAULT_GOAL := help
 
@@ -19,14 +19,15 @@ help:
 	@echo "    make watch-cloud    Mode A: S3→Bedrock worker on your laptop"
 	@echo "    make deploy-aws     Mode B: EC2 shop + watcher (see docs/AWS.md)"
 	@echo "    make destroy-aws    Tear down the EC2 stack"
-	@echo "    make changefeed     CDC CLI (or use Enable in the console)"
+	@echo "    make logs           Tail Lambda + EC2 logs in one terminal"
+	@echo "    make synth-infra    CDK → infra/ec2.yaml + infra/lambda.yaml"
 	@echo "    make mcp            Memstream MCP HTTP (:8765)"
 	@echo ""
 	@echo "  Demo rehearsal:"
-	@echo "    make demo-reset     Reset shop + tickets + memory chunks"
-	@echo "    make shop           Print shop URL"
+	@echo "    make demo-reset     Full reset to demo start (shop + platform clutter)"
+	@echo "    make demo-reset-shop  Shop + memory only (narrow)"
 	@echo ""
-	@echo "Docs: README.md · docs/AWS.md · docs/DEMO_SCRIPT.md"
+	@echo "Docs: README.md · docs/AWS.md · docs/SELF_HOST.md · docs/DEMO_SCRIPT.md"
 
 install-js:
 	npm install --no-fund --no-audit
@@ -40,15 +41,15 @@ test-engine:
 demo-local:
 	bash scripts/run-local-ts.sh
 
-# Reset shop + memory for video rehearsal (does not destroy AWS).
+# Full reset to demo beginning (does not destroy AWS / changefeeds).
 demo-reset:
 	set -a && . ./.env && set +a && \
 	npm run demo-reset --
 
-# Demo shop is part of the Next app.
-shop:
-	@echo "Start the console if needed: make web"
-	@echo "Shop: http://127.0.0.1:3000/shop"
+# Narrow: shop seed + memory + CDC keys only.
+demo-reset-shop:
+	set -a && . ./.env && set +a && \
+	npm run demo-reset -- --shop
 
 # Create memstream + application DBs and apply sql/*.sql
 # Needs CLUSTER_URL or MEMSTREAM_DATABASE_URL / DATABASE_URL in .env
@@ -59,6 +60,7 @@ watch-cloud:
 	set -a && . ./.env && set +a && \
 	MEMSTREAM_WATCH=true bash scripts/run-cloud-ts.sh
 
+# Ops escape hatch — prefer Enable in the console.
 changefeed-dry:
 	set -a && . ./.env && set +a && \
 	npm run changefeed -- --dry-run
@@ -66,10 +68,6 @@ changefeed-dry:
 changefeed:
 	set -a && . ./.env && set +a && \
 	npm run changefeed --
-
-propose:
-	set -a && . ./.env && set +a && \
-	npm run propose -- --out profiles/discovered.yaml
 
 mcp:
 	set -a && . ./.env && set +a && \
@@ -81,8 +79,9 @@ mcp-stdio:
 	MEMSTREAM_MCP_TRANSPORT=stdio npm run mcp:ts --
 
 web:
-	npm run build -w @memstream/engine
-	npm run build -w @memstream/mcp
+	set -a && . ./.env && set +a && \
+	npm run build -w @memstream/engine && \
+	npm run build -w @memstream/mcp && \
 	npm run dev -w web
 
 deploy-aws:
@@ -90,3 +89,15 @@ deploy-aws:
 
 destroy-aws:
 	bash scripts/destroy-aws.sh
+
+# One terminal: Lambda CloudWatch + EC2 journalctl (via SSM). LOGS=lambda|ec2|all
+logs:
+	bash scripts/tail-aws-logs.sh
+
+synth-infra:
+	npm run synth -w @memstream/infra
+
+# Dev escape hatch — prefer make synth-infra.
+cdk-diff:
+	npm run build -w @memstream/infra
+	cd infra/cdk && npx cdk diff MemstreamEc2 MemstreamLambda || true

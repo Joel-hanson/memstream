@@ -11,12 +11,11 @@ export default async function ShopPage({
 }) {
   const params = await searchParams;
   const shop = await resolveShop();
-  const [orders, stock, tickets, users, cdc] = await Promise.all([
+  const [orders, stock, tickets, users] = await Promise.all([
     Promise.resolve(shop.listOrders()),
     Promise.resolve(shop.listStock()),
     Promise.resolve(shop.listTickets()),
     Promise.resolve(shop.listUsers()),
-    Promise.resolve(shop.listCdcFiles()),
   ]);
   return (
     <ShopClient
@@ -24,7 +23,6 @@ export default async function ShopPage({
       stock={stock}
       tickets={tickets}
       users={users}
-      cdc={cdc}
       message={params.msg}
       error={params.err}
       backend={shop.backend}

@@ -75,6 +75,40 @@
       "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"
     },
     {
+      "Sid": "SsmSessionForEc2Logs",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ssm:*::document/AWS-StartNonInteractiveCommand",
+        "arn:aws:ssm:*:*:document/AWS-StartNonInteractiveCommand"
+      ]
+    },
+    {
+      "Sid": "SsmSessionLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession"
+      ],
+      "Resource": "arn:aws:ssm:*:*:session/*"
+    },
+    {
+      "Sid": "CloudWatchLogsRead",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:StartLiveTail",
+        "logs:StopLiveTail"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "LambdaWorker",
       "Effect": "Allow",
       "Action": [

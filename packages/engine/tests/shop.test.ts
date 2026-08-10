@@ -57,11 +57,26 @@ describe("InMemoryShop placeOrder", () => {
     const result = s.openTicket({ orderId: "100" });
     expect(result.message).toContain("Opened ticket");
     const tickets = s.listTickets();
-    expect(tickets).toHaveLength(1);
-    expect(String(tickets[0]!.body)).toContain("Alex");
-    expect(String(tickets[0]!.body)).toContain("SKU-12");
-    expect(String(tickets[0]!.body)).toContain("order 100");
+    expect(tickets.length).toBeGreaterThanOrEqual(2);
+    const live = tickets.find((t) => String(t.order_id) === "100");
+    expect(live).toBeTruthy();
+    expect(String(live!.body)).toContain("Alex");
+    expect(String(live!.body)).toContain("SKU-12");
+    expect(String(live!.body)).toContain("order 100");
     expect(result.cdcPath).toMatch(/tickets\//);
+  });
+
+  it("saves a case note handoff for staff resume", () => {
+    const s = shop();
+    const result = s.addCaseNote({
+      body: "Waiting on warehouse replace for order 100.",
+      author: "staff",
+      orderId: "100",
+    });
+    expect(result.noteId).toMatch(/^n-/);
+    const notes = s.listCaseNotes();
+    expect(notes.some((n) => String(n.id) === result.noteId)).toBe(true);
+    expect(result.cdcPath).toMatch(/case_notes\//);
   });
 
   it("rejects tickets before ship", () => {

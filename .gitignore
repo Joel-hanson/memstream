@@ -23,4 +23,5 @@ apps/web/.env.local/
 *.tsbuildinfo
 data/memstream-chunks-ts.json
 packages/*/dist/
+infra/cdk/cdk.out/
 certs/root.crt

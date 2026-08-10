@@ -85,20 +85,33 @@ const SELECT_COLS = `
 /** Active application connection, or null if none / platform DB unset. */
 export async function getActiveConnection(
   root = findRepoRoot(),
+  orgId?: string | null,
 ): Promise<MemstreamConnection | null> {
   const url = memstreamDatabaseUrl(root);
   if (!url) return null;
   await ensureMemstreamSchema(root);
+  const scoped = orgId?.trim() || null;
   return withClientObjects(url, async (client) => {
-    const result = await client.query(
-      `
+    const result = scoped
+      ? await client.query(
+          `
+      SELECT ${SELECT_COLS}
+      FROM memstream_connections
+      WHERE is_active = true AND org_id = $1
+      ORDER BY updated_at DESC
+      LIMIT 1
+      `,
+          [scoped],
+        )
+      : await client.query(
+          `
       SELECT ${SELECT_COLS}
       FROM memstream_connections
       WHERE is_active = true
       ORDER BY updated_at DESC
       LIMIT 1
       `,
-    );
+        );
     if (!result.rows.length) return null;
     return rowToConnection(result.rows[0]!, root);
   });
@@ -205,9 +218,18 @@ export async function upsertConnection(
   const orgId = input.orgId?.trim() || null;
 
   return withClientObjects(url, async (client) => {
-    await client.query(
-      `UPDATE memstream_connections SET is_active = false WHERE is_active = true`,
-    );
+    if (orgId) {
+      await client.query(
+        `UPDATE memstream_connections SET is_active = false
+         WHERE is_active = true AND org_id = $1`,
+        [orgId],
+      );
+    } else {
+      await client.query(
+        `UPDATE memstream_connections SET is_active = false
+         WHERE is_active = true AND org_id IS NULL`,
+      );
+    }
 
     if (input.id) {
       const updated = await client.query(
@@ -246,9 +268,3 @@ export async function upsertConnection(
     return rowToConnection(inserted.rows[0]!, root);
   });
 }
-
-/** Workspace helpers — same rows as connections; id is the workspace id. */
-export const getWorkspace = getConnection;
-export const listWorkspaces = listConnections;
-export const upsertWorkspace = upsertConnection;
-export const getActiveWorkspace = getActiveConnection;

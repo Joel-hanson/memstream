@@ -1,15 +1,13 @@
 /** Console actions: schema, pipeline, enable, profiles. */
 
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { cancelChangefeed, createChangefeed } from "./changefeed.js";
 import { withClient, withClientObjects } from "./db.js";
 import {
@@ -36,16 +34,23 @@ import {
   updateRunProgress,
 } from "./runs.js";
 import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
-import { getConnection, upsertConnection } from "./connections.js";
+import {
+  getActiveConnection,
+  getConnection,
+  upsertConnection,
+} from "./connections.js";
 import {
   cloudWorkerStackName,
   isPrebuiltRuntime,
   resolveWorkerCompute,
   workerComputeLabel,
+  WORKER_COMPUTE,
   type WorkerCompute,
 } from "./worker-compute.js";
 import { derivePipelineHealth } from "./pipeline-health.js";
 import { cdcScopeId } from "./state.js";
+import { JOB_STEP_STATUS, RUN_STATUS } from "./constants.js";
+import { resilientS3, withResilience } from "./resilience.js";
 
 /** Stop on-box S3 poller so Lambda is the only consumer of the CDC prefix. */
 function stopPrebuiltWatch(job: Job): void {
@@ -89,16 +94,6 @@ export function repoRoot(from = process.cwd()): string {
   return from;
 }
 
-export function consoleDir(root = repoRoot()): string {
-  const path = join(root, ".memstream-console");
-  mkdirSync(path, { recursive: true });
-  return path;
-}
-
-export function sessionEnvPath(root = repoRoot()): string {
-  return join(consoleDir(root), "session.env");
-}
-
 export async function listProfiles(root = repoRoot()): Promise<{
   id: string;
   path: string;
@@ -107,42 +102,6 @@ export async function listProfiles(root = repoRoot()): Promise<{
   const { listStoredProfiles } = await import("./profile-store.js");
   const rows = await listStoredProfiles(root);
   return rows.map(({ id, path, application }) => ({ id, path, application }));
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-export function writeSessionEnv(
-  values: Record<string, string>,
-  root = repoRoot(),
-): string {
-  const path = sessionEnvPath(root);
-  const lines = Object.entries(values)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k}=${shellQuote(v)}`);
-  writeFileSync(path, lines.join("\n") + "\n", "utf-8");
-  chmodSync(path, 0o600);
-  return path;
-}
-
-export function readSessionEnv(
-  path = sessionEnvPath(),
-): Record<string, string> {
-  if (!existsSync(path)) return {};
-  const out: Record<string, string> = {};
-  for (const raw of readFileSync(path, "utf-8").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#") || !line.includes("=")) continue;
-    const eq = line.indexOf("=");
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1).replace(/'"'"'/g, "'");
-    }
-    out[key] = value;
-  }
-  return out;
 }
 
 export function splitSqlStatements(sql: string): string[] {
@@ -355,12 +314,14 @@ export async function s3CdcSnapshot(
     let latestMs = 0;
     let token: string | undefined;
     do {
-      const page = await client.send(
-        new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: prefix.replace(/^\//, ""),
-          ContinuationToken: token,
-        }),
+      const page = await withResilience(resilientS3, () =>
+        client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: prefix.replace(/^\//, ""),
+            ContinuationToken: token,
+          }),
+        ),
       );
       for (const obj of page.Contents || []) {
         total += 1;
@@ -378,13 +339,57 @@ export async function s3CdcSnapshot(
   }
 }
 
-export async function s3ObjectCount(
+/**
+ * Delete all objects under the CDC prefix (not the whole bucket — leaves
+ * deploy/ and other keys alone). Returns null when bucket/prefix is missing.
+ * Throws on AWS API failures.
+ */
+export async function clearS3CdcPrefix(
   bucket: string,
   prefix = "cdc/",
   region = "us-east-1",
-): Promise<number | null> {
-  const snap = await s3CdcSnapshot(bucket, prefix, region);
-  return snap?.count ?? null;
+): Promise<{ deleted: number } | null> {
+  const normalized = prefix.replace(/^\//, "").trim();
+  if (!bucket || !normalized) return null;
+  const client = new S3Client({ region });
+  let deleted = 0;
+  // List → delete until empty (safer than paging while mutating).
+  for (;;) {
+    const page = await withResilience(resilientS3, () =>
+      client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: normalized,
+          MaxKeys: 1000,
+        }),
+      ),
+    );
+    const keys = (page.Contents || [])
+      .map((o) => o.Key)
+      .filter((k): k is string => typeof k === "string" && !k.endsWith("/"));
+    if (keys.length === 0) break;
+    const result = await withResilience(resilientS3, () =>
+      client.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: keys.map((Key) => ({ Key })),
+            Quiet: true,
+          },
+        }),
+      ),
+    );
+    const errors = result.Errors?.length ?? 0;
+    deleted += keys.length - errors;
+    if (errors > 0) {
+      const sample = result.Errors?.[0];
+      throw new Error(
+        `S3 DeleteObjects failed for ${errors} key(s) under s3://${bucket}/${normalized}` +
+          (sample?.Message ? `: ${sample.Message}` : ""),
+      );
+    }
+  }
+  return { deleted };
 }
 
 /** Platform cursor stats for a CDC scope (connection or s3:bucket:prefix). */
@@ -435,19 +440,38 @@ export async function buildPipelineStatus(options: {
   root?: string;
 }): Promise<Record<string, unknown>> {
   const root = options.root ?? repoRoot();
-  const session = readSessionEnv(sessionEnvPath(root));
-  const databaseUrl = options.databaseUrl || session.DATABASE_URL || "";
-  const bucket = options.bucket || session.CDC_S3_BUCKET || "";
-  const prefix = options.prefix || session.CDC_S3_PREFIX || "cdc/";
-  const region = options.region || session.AWS_REGION || "us-east-1";
-  const stackName = options.stackName || session.STACK_NAME || "memstream-demo";
+  const connectionId = options.connectionId?.trim() || null;
+  const conn = connectionId
+    ? await getConnection(connectionId, root)
+    : await getActiveConnection(root);
+
+  const databaseUrl =
+    options.databaseUrl ||
+    conn?.database_url ||
+    process.env.DATABASE_URL?.trim() ||
+    "";
+  const bucket =
+    options.bucket ||
+    conn?.bucket ||
+    process.env.CDC_S3_BUCKET?.trim() ||
+    "";
+  const prefix =
+    options.prefix ||
+    conn?.prefix ||
+    process.env.CDC_S3_PREFIX?.trim() ||
+    "cdc/";
+  const region =
+    options.region ||
+    conn?.region ||
+    process.env.AWS_REGION?.trim() ||
+    "us-east-1";
+  const stackName =
+    options.stackName || process.env.STACK_NAME?.trim() || "memstream-demo";
   const profilePath =
-    options.profilePath || session.MEMORY_PROFILE || "commerce";
-  let tables = options.tables || session.MEMSTREAM_CHANGEFEED_TABLES || "";
-  const connectionId =
-    options.connectionId?.trim() ||
-    session.MEMSTREAM_CONNECTION_ID?.trim() ||
-    null;
+    options.profilePath || process.env.MEMORY_PROFILE?.trim() || "commerce";
+  let tables =
+    options.tables || process.env.MEMSTREAM_CHANGEFEED_TABLES?.trim() || "";
+  const resolvedConnectionId = connectionId || conn?.id || null;
 
   let tableList = tables
     .split(",")
@@ -470,9 +494,9 @@ export async function buildPipelineStatus(options: {
 
   if (databaseUrl) {
     try {
-      mem = await memoryMetrics(databaseUrl, connectionId);
+      mem = await memoryMetrics(databaseUrl, resolvedConnectionId);
       feeds = await changefeedMetrics(databaseUrl);
-      recent = await listRecentChunks(databaseUrl, 5, connectionId);
+      recent = await listRecentChunks(databaseUrl, 5, resolvedConnectionId);
       dbOk = true;
     } catch (err) {
       dbError = err instanceof Error ? err.message : String(err);
@@ -486,7 +510,7 @@ export async function buildPipelineStatus(options: {
   const shopUrl = outs.ShopUrl ?? null;
 
   const scopeId = cdcScopeId({
-    connectionId,
+    connectionId: resolvedConnectionId,
     source: "s3",
     bucket: bucket || null,
     prefix,
@@ -510,11 +534,12 @@ export async function buildPipelineStatus(options: {
 
   return {
     session: {
-      has_session: Object.keys(session).length > 0,
+      has_session: Boolean(databaseUrl || bucket || resolvedConnectionId),
       bucket,
       region,
       profile_path: profilePath,
       stack_name: stackName,
+      connection_id: resolvedConnectionId,
     },
     sources: [
       {
@@ -576,7 +601,9 @@ export async function buildPipelineStatus(options: {
         id: "bedrock",
         label: PIPELINE_LABELS.embeddings,
         detail: "Turns text into searchable meaning",
-        hint: session.BEDROCK_EMBED_MODEL || "amazon.titan-embed-text-v2:0",
+        hint:
+          process.env.BEDROCK_EMBED_MODEL?.trim() ||
+          "amazon.titan-embed-text-v2:0",
         statusLabel: dbOk ? "Ready" : "Waiting",
         count: dbOk ? 1 : 0,
         state: dbOk ? "ok" : "idle",
@@ -649,7 +676,7 @@ async function deployCloudWorker(
   const prebuilt = isPrebuiltRuntime(process.env, options.root);
   job.append(`Cloud worker compute: ${label} (stack ${deployedStackName})`);
 
-  if (compute === "lambda") {
+  if (compute === WORKER_COMPUTE.LAMBDA) {
     await deployLambdaStack({
       root: options.root,
       databaseUrl: options.databaseUrl,
@@ -708,20 +735,6 @@ export async function runEnablePipeline(
   },
 ): Promise<Record<string, unknown>> {
   const root = options.root ?? repoRoot();
-  const values = {
-    DATABASE_URL: options.databaseUrl,
-    AWS_REGION: options.region,
-    CDC_S3_BUCKET: options.bucket,
-    CDC_S3_PREFIX: options.prefix,
-    BEDROCK_EMBED_MODEL: options.embedModel,
-    MEMORY_PROFILE: options.profilePath,
-    MEMSTREAM_EMBEDDER: "bedrock",
-    MEMSTREAM_STORE: "cockroach",
-    MEMSTREAM_SOURCE: "s3",
-    MEMSTREAM_WATCH: "true",
-    STACK_NAME: options.stackName,
-    MEMSTREAM_CHANGEFEED_TABLES: options.tables,
-  };
 
   let runId: string | null = null;
   try {
@@ -761,12 +774,17 @@ export async function runEnablePipeline(
     runId = run?.id ?? null;
     if (runId) {
       bindJobToRun(job, runId, async (snapshot) => {
+        // Only mirror terminal status from the job (abort → failed). Mid-flight
+        // "running" must not overwrite finishRun(succeeded) when a flush lags.
         await updateRunProgress(
           snapshot.runId,
           {
             log: snapshot.log,
             steps: snapshot.steps,
-            status: snapshot.status,
+            ...(snapshot.status === RUN_STATUS.FAILED ||
+            snapshot.status === RUN_STATUS.SUCCEEDED
+              ? { status: snapshot.status }
+              : {}),
           },
           root,
         );
@@ -777,10 +795,6 @@ export async function runEnablePipeline(
         "MEMSTREAM_DATABASE_URL unset — enable continues without run history",
       );
     }
-
-    // Local worker bridge only — source of truth is memstream_connections (workspace).
-    const envPath = writeSessionEnv(values, root);
-    job.append(`Wrote local worker env → ${envPath}`);
 
     job.setSteps(
       buildEnableSteps({
@@ -801,7 +815,7 @@ export async function runEnablePipeline(
     const worker = resourceById("worker")!;
 
     job.setStep("schema", {
-      status: "running",
+      status: JOB_STEP_STATUS.RUNNING,
       detail: "Creating app tables + agent_memory_chunks (vector)…",
     });
     job.append(`${schema.label}: applying sql/application.sql on Connect DB…`);
@@ -810,16 +824,16 @@ export async function runEnablePipeline(
       `${schema.label}: ready (${n} statements) — includes agent_memory_chunks VECTOR(1024)`,
     );
     job.setStep("schema", {
-      status: "done",
+      status: JOB_STEP_STATUS.DONE,
       detail: schema.blurb,
     });
 
     job.setStep("changefeed", {
-      status: "running",
+      status: JOB_STEP_STATUS.RUNNING,
       detail: `Starting stream for ${options.tables}…`,
     });
     job.setStep("s3", {
-      status: "running",
+      status: JOB_STEP_STATUS.RUNNING,
       detail: `Connecting change storage…`,
     });
     job.append(
@@ -834,19 +848,19 @@ export async function runEnablePipeline(
     });
     job.append(`${changes.label}: ready (${result.jobRows} job(s))`);
     job.setStep("changefeed", {
-      status: "done",
+      status: JOB_STEP_STATUS.DONE,
       detail: `Streaming ${options.tables}`,
     });
     job.setStep("s3", {
-      status: "done",
+      status: JOB_STEP_STATUS.DONE,
       detail: `s3://${options.bucket}/${options.prefix}`,
     });
     job.setStep("embed", {
-      status: "done",
+      status: JOB_STEP_STATUS.DONE,
       detail: options.embedModel || embed.blurb,
     });
     job.setStep("vectors", {
-      status: "done",
+      status: JOB_STEP_STATUS.DONE,
       detail: memory.blurb,
     });
 
@@ -860,14 +874,14 @@ export async function runEnablePipeline(
       );
       const prebuilt = isPrebuiltRuntime(process.env, root);
       job.setStep("worker", {
-        status: "running",
+        status: JOB_STEP_STATUS.RUNNING,
         detail:
-          prebuilt && compute === "ec2"
+          prebuilt && compute === WORKER_COMPUTE.EC2
             ? "Using on-box memory worker (memstream-watch)…"
             : `Starting cloud memory worker (${workerComputeLabel(compute)})…`,
       });
       job.append(
-        prebuilt && compute === "ec2"
+        prebuilt && compute === WORKER_COMPUTE.EC2
           ? `${worker.label}: using on-box memstream-watch…`
           : `${worker.label}: deploying via AWS SDK…`,
       );
@@ -885,7 +899,7 @@ export async function runEnablePipeline(
       });
       shopUrl = deployed.shopUrl;
       deployedStackName = deployed.deployedStackName;
-      if (!shopUrl && compute === "ec2" && !prebuilt) {
+      if (!shopUrl && compute === WORKER_COMPUTE.EC2 && !prebuilt) {
         const outs = await describeStackOutputs(
           deployedStackName,
           options.region,
@@ -894,11 +908,11 @@ export async function runEnablePipeline(
       }
       if (shopUrl && shopUrl.startsWith("http")) {
         job.append(`Shop URL: ${shopUrl}`);
-      } else if (prebuilt && compute === "ec2") {
+      } else if (prebuilt && compute === WORKER_COMPUTE.EC2) {
         job.append(
           "Shop/console is this host — memstream-watch embeds S3 → live memory",
         );
-      } else if (compute === "lambda") {
+      } else if (compute === WORKER_COMPUTE.LAMBDA) {
         job.append(
           prebuilt
             ? "Lambda worker ready — shop/console stays on this EC2 host"
@@ -910,33 +924,33 @@ export async function runEnablePipeline(
         );
       }
       job.setStep("worker", {
-        status: "done",
+        status: JOB_STEP_STATUS.DONE,
         detail:
-          prebuilt && compute === "ec2"
+          prebuilt && compute === WORKER_COMPUTE.EC2
             ? "On-box memstream-watch (already running)"
-            : compute === "lambda"
+            : compute === WORKER_COMPUTE.LAMBDA
               ? `Lambda stack ${deployedStackName} ready`
               : shopUrl || `Stack ${deployedStackName} ready`,
       });
     } else {
       job.append(`${worker.label}: skipped (local mode)`);
       job.setStep("worker", {
-        status: "skipped",
+        status: JOB_STEP_STATUS.SKIPPED,
         detail: "Cloud worker off — use local worker / demo shop",
       });
     }
 
     const payload = {
-      env_file: envPath,
       tables: result.tables,
       shop_url: shopUrl || "/shop",
       stack_name: options.deploy ? deployedStackName : null,
       run_id: runId,
+      connection_id: connectionId,
     };
 
     if (runId) {
       await finishRun(runId, {
-        status: "succeeded",
+        status: RUN_STATUS.SUCCEEDED,
         log: [...job.log],
         steps: job.steps.map((s) => ({ ...s })),
         shopUrl: payload.shop_url,
@@ -949,7 +963,7 @@ export async function runEnablePipeline(
     const message = err instanceof Error ? err.message : String(err);
     if (runId) {
       await finishRun(runId, {
-        status: "failed",
+        status: RUN_STATUS.FAILED,
         log: [...job.log, `ERROR: ${message}`],
         steps: job.steps.map((s) => ({ ...s })),
         error: message,
@@ -1012,10 +1026,6 @@ export async function teardownAndDeleteRun(
   if (run.connection_id) {
     const conn = await getConnection(run.connection_id, root);
     databaseUrl = conn?.database_url ?? null;
-  }
-  if (!databaseUrl) {
-    const session = readSessionEnv(sessionEnvPath(root));
-    databaseUrl = session.DATABASE_URL?.trim() || null;
   }
 
   const othersShareConnection =

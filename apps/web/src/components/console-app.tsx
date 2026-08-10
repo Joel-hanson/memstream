@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getEnableProgress } from "@/components/enable-flow";
 import { previewFlow } from "@/components/memory-flow";
 import { Spinner } from "@/components/ui/spinner";
-import { consoleApi } from "@/lib/api-client";
+import { consoleApi, type OrgInfo, type ProfileVersionInfo } from "@/lib/api-client";
 import { isUsableDatabaseUrl } from "@/lib/connect-url";
-import { suggestProfileId } from "@/lib/utils";
+import { readStoredOrgId, storeOrgId } from "@/lib/org-session";
+import { copyToClipboard, suggestProfileId } from "@/lib/utils";
 import {
   defaultConnect,
   type ConnectConfig,
@@ -29,15 +30,22 @@ import {
   EnableResources,
   FlowPrimaryCta,
   LivePanel,
+  OrgDialog,
   RunSummaryCard,
   RunsSheet,
   SetupLogDialog,
   SetupWizard,
+  RUN_STATUS,
+  WORKER_COMPUTE,
+  isActiveRunStatus,
+  isTerminalRunStatus,
   jobFromRun,
   pickPrimaryRun,
+  profileIdFromPath,
   readStoredEnableJobId,
   runProfileLabel,
   storeEnableJobId,
+  enableStepsComplete,
 } from "@/features/console";
 
 export function ConsoleApp() {
@@ -47,12 +55,19 @@ export function ConsoleApp() {
   const [profilePath, setProfilePath] = useState("profiles/commerce.yaml");
   const [tables, setTables] = useState("orders,stock");
   const [deploy, setDeploy] = useState(true);
-  const [workerCompute, setWorkerCompute] = useState<"ec2" | "lambda">("lambda");
+  const [workerCompute, setWorkerCompute] = useState<"ec2" | "lambda">(WORKER_COMPUTE.LAMBDA);
   const [stackName, setStackName] = useState("memstream-demo");
   const [configMode, setConfigMode] = useState<"template" | "discover">(
     "template",
   );
   const [application, setApplication] = useState("discovered-app");
+  const [profileVersions, setProfileVersions] = useState<ProfileVersionInfo[]>(
+    [],
+  );
+  const [org, setOrg] = useState<OrgInfo | null>(null);
+  const [orgs, setOrgs] = useState<OrgInfo[]>([]);
+  const [orgOpen, setOrgOpen] = useState(false);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [ruleEnabled, setRuleEnabled] = useState<Record<string, boolean>>({});
   const [saveId, setSaveId] = useState(() => suggestProfileId("discovered-app"));
@@ -132,6 +147,44 @@ export function ConsoleApp() {
     if (result.ok && result.value.tables) setTables(result.value.tables);
   }, []);
 
+  const loadProfileVersions = useCallback(async (path: string) => {
+    const id = profileIdFromPath(path);
+    if (!id) {
+      setProfileVersions([]);
+      return;
+    }
+    const result = await consoleApi.profiles.versions(id);
+    if (result.ok) setProfileVersions(result.value.versions || []);
+    else setProfileVersions([]);
+  }, []);
+
+  useEffect(() => {
+    if (modal !== "configure") return;
+    void loadProfileVersions(profilePath);
+  }, [modal, profilePath, loadProfileVersions]);
+
+  const loadOrgs = useCallback(async () => {
+    const stored = readStoredOrgId();
+    const result = await consoleApi.org.get();
+    if (!result.ok) return;
+    const list = result.value.orgs || [];
+    setOrgs(list);
+    const current =
+      result.value.org ||
+      (stored ? list.find((o) => o.id === stored) || null : null);
+    if (current) {
+      setOrg(current);
+      storeOrgId(current.id);
+    } else if (stored && !list.some((o) => o.id === stored)) {
+      storeOrgId(null);
+      setOrg(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOrgs();
+  }, [loadOrgs]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -147,7 +200,7 @@ export function ConsoleApp() {
               setHasStoredUrl(true);
               setUrlHint(d.database_url_hint || d.connection_id || "saved");
             }
-            if (d.worker_compute === "lambda" || d.worker_compute === "ec2") {
+            if (d.worker_compute === WORKER_COMPUTE.LAMBDA || d.worker_compute === WORKER_COMPUTE.EC2) {
               setWorkerCompute(d.worker_compute);
             }
             if (d.platform_configured === false) {
@@ -204,8 +257,12 @@ export function ConsoleApp() {
               }
               setProfileReady(true);
               setJob(jobFromRun(run));
-              setWatching(run.status === "succeeded");
-              if (run.status === "running" || run.status === "queued") {
+              const liveNow =
+                run.status === RUN_STATUS.SUCCEEDED ||
+                (isActiveRunStatus(run.status) &&
+                  enableStepsComplete(run.steps));
+              setWatching(liveNow);
+              if (isActiveRunStatus(run.status) && !enableStepsComplete(run.steps)) {
                 const resumeJobId = run.job_id || storedJobId;
                 if (resumeJobId) {
                   storeEnableJobId(resumeJobId);
@@ -333,7 +390,7 @@ export function ConsoleApp() {
         // Durable run without live worker — server restarted mid-enable.
         if (
           data.live === false &&
-          (data.status === "running" || data.status === "queued")
+          (isActiveRunStatus(data.status))
         ) {
           staleTicks += 1;
           if (staleTicks >= 8) {
@@ -345,7 +402,7 @@ export function ConsoleApp() {
         staleTicks = 0;
         void refreshPipeline();
 
-        if (data.status === "succeeded" || data.status === "failed") {
+        if (isTerminalRunStatus(data.status)) {
           if (pollRef.current) clearInterval(pollRef.current);
           storeEnableJobId(null);
           setBusy(null);
@@ -420,12 +477,11 @@ export function ConsoleApp() {
       }
       setProfileReady(true);
       setJob(jobFromRun(run));
-      if (run.status === "succeeded") setWatching(true);
-      else setWatching(false);
-      if (
-        (run.status === "running" || run.status === "queued") &&
-        run.job_id
-      ) {
+      const liveNow =
+        run.status === RUN_STATUS.SUCCEEDED ||
+        (isActiveRunStatus(run.status) && enableStepsComplete(run.steps));
+      setWatching(liveNow);
+      if (isActiveRunStatus(run.status) && !enableStepsComplete(run.steps) && run.job_id) {
         pollJob(run.job_id);
       }
     },
@@ -636,8 +692,37 @@ export function ConsoleApp() {
       setProfilePath(result.value.path || `profiles/${saveId}.yaml`);
       if (result.value.tables) setTables(result.value.tables);
       await loadProfiles();
+      await loadProfileVersions(result.value.path || `profiles/${saveId}.yaml`);
       setProfileReady(true);
       setModal("enable");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onRestoreProfileVersion = async (version: number) => {
+    const id = profileIdFromPath(profilePath) || saveId;
+    if (!id) {
+      setError("Select a profile first");
+      return;
+    }
+    setBusy("restore-profile");
+    setError(null);
+    try {
+      const result = await consoleApi.profiles.restore({ id, version });
+      if (!result.ok) {
+        setError(result.error.message || "Restore failed");
+        return;
+      }
+      const path = result.value.path || `profiles/${id}.yaml`;
+      setProfilePath(path);
+      if (result.value.tables) setTables(result.value.tables);
+      setSaveId(id);
+      setDraft(null);
+      await loadProfiles();
+      await loadProfileVersions(path);
+      setNotice(`Restored ${id} to version ${version}`);
+      setProfileReady(true);
     } finally {
       setBusy(null);
     }
@@ -647,6 +732,81 @@ export function ConsoleApp() {
     await syncTables(profilePath);
     setProfileReady(true);
     setModal("enable");
+  };
+
+  const onCreateOrg = async (name: string) => {
+    setBusy("org");
+    setError(null);
+    try {
+      const result = await consoleApi.org.create(name);
+      if (!result.ok) {
+        setError(result.error.message || "Could not create org");
+        return;
+      }
+      if (result.value.org) {
+        setOrg(result.value.org);
+        storeOrgId(result.value.org.id);
+        setNotice(`Org ${result.value.org.name} ready`);
+      }
+      await loadOrgs();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onInviteOrg = async () => {
+    if (!org?.id) return;
+    setBusy("org");
+    setError(null);
+    try {
+      const result = await consoleApi.org.invite(org.id);
+      if (!result.ok) {
+        setError(result.error.message || "Could not create invite");
+        return;
+      }
+      if (result.value.invite?.code) {
+        setInviteCode(result.value.invite.code);
+        setNotice("Invite code ready — copy and share it");
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onJoinOrg = async (code: string) => {
+    setBusy("org");
+    setError(null);
+    try {
+      const result = await consoleApi.org.join(code);
+      if (!result.ok) {
+        setError(result.error.message || "Could not join org");
+        return;
+      }
+      if (result.value.org) {
+        setOrg(result.value.org);
+        storeOrgId(result.value.org.id);
+        setNotice(`Joined ${result.value.org.name}`);
+      }
+      setInviteCode(null);
+      await loadOrgs();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onSelectOrg = (id: string) => {
+    const next = orgs.find((o) => o.id === id) || null;
+    setOrg(next);
+    storeOrgId(next?.id || null);
+    setInviteCode(null);
+    setNotice(next ? `Using org ${next.name}` : null);
+  };
+
+  const onClearOrg = () => {
+    setOrg(null);
+    storeOrgId(null);
+    setInviteCode(null);
+    setNotice("Cleared org context");
   };
 
   const onSaveConnect = async () => {
@@ -662,6 +822,7 @@ export function ConsoleApp() {
       const result = await consoleApi.connection.put({
         ...connect,
         id: connectionId || undefined,
+        org_id: org?.id || readStoredOrgId() || undefined,
       });
       if (!result.ok) {
         setError(result.error.message || "Could not save connection");
@@ -730,22 +891,22 @@ export function ConsoleApp() {
   /** Anatomy / Live only for a real selected run, or enable in flight. */
   const showProof =
     Boolean(activeRun) ||
-    job?.status === "running" ||
-    job?.status === "queued" ||
+    job?.status === RUN_STATUS.RUNNING ||
+    job?.status === RUN_STATUS.QUEUED ||
     // Keep Live while /api/runs catches up after enable succeeds
-    (Boolean(activeRunId) && job?.status === "succeeded");
+    (Boolean(activeRunId) && job?.status === RUN_STATUS.SUCCEEDED);
   const resumeRun = useMemo(() => pickPrimaryRun(runs), [runs]);
   const filteredRuns = useMemo(() => {
     if (runsFilter === "live") {
       return runs.filter(
         (r) =>
-          r.status === "succeeded" ||
-          r.status === "running" ||
-          r.status === "queued",
+          r.status === RUN_STATUS.SUCCEEDED ||
+          r.status === RUN_STATUS.RUNNING ||
+          r.status === RUN_STATUS.QUEUED,
       );
     }
     if (runsFilter === "failed") {
-      return runs.filter((r) => r.status === "failed");
+      return runs.filter((r) => r.status === RUN_STATUS.FAILED);
     }
     return runs;
   }, [runs, runsFilter]);
@@ -788,7 +949,7 @@ export function ConsoleApp() {
   ).filter((b) => b.id !== "shop");
 
   const workerStamp = deploy
-    ? workerCompute === "lambda"
+    ? workerCompute === WORKER_COMPUTE.LAMBDA
       ? `Managed Lambda · ${activeRun?.stack_name || stackName || "cloud"}`
       : `EC2 · ${activeRun?.stack_name || stackName || "cloud"}`
     : "Local worker";
@@ -832,7 +993,7 @@ export function ConsoleApp() {
           else if (!profileReady) setModal("configure");
           return;
         }
-        if (job?.status === "failed") {
+        if (job?.status === RUN_STATUS.FAILED) {
           void onEnable();
           return;
         }
@@ -844,7 +1005,7 @@ export function ConsoleApp() {
   );
 
   const hideFlowFooter =
-    job?.status === "succeeded" || watching || hasMemory;
+    job?.status === RUN_STATUS.SUCCEEDED || watching || hasMemory;
 
   const flowFooter = hideFlowFooter ? null : (
     <div className="flex w-full flex-wrap items-center justify-between gap-2">
@@ -869,9 +1030,9 @@ export function ConsoleApp() {
   );
 
   const jobInFlight =
-    job?.status === "running" ||
-    job?.status === "queued" ||
-    job?.status === "failed";
+    job?.status === RUN_STATUS.RUNNING ||
+    job?.status === RUN_STATUS.QUEUED ||
+    job?.status === RUN_STATUS.FAILED;
 
   const enableProgress = useMemo(
     () =>
@@ -890,7 +1051,7 @@ export function ConsoleApp() {
       recentChunks[0]?.body || "What happened recently with orders?";
     const prompt = `Call search_memory with: ${sample.slice(0, 120)}`;
     try {
-      await navigator.clipboard.writeText(prompt);
+      await copyToClipboard(prompt);
       setAskCopied(true);
       window.setTimeout(() => setAskCopied(false), 2000);
     } catch {
@@ -911,7 +1072,7 @@ export function ConsoleApp() {
       return;
     }
     try {
-      await navigator.clipboard.writeText(data.json);
+      await copyToClipboard(data.json);
       setMcpCopied(true);
       window.setTimeout(() => setMcpCopied(false), 2000);
       if (!data.ready && data.detail) {
@@ -934,11 +1095,13 @@ export function ConsoleApp() {
       <ConsoleHeaderBar
         watching={watching}
         showProof={showProof}
-        jobFailed={job?.status === "failed"}
+        jobFailed={job?.status === RUN_STATUS.FAILED}
         canEnable={canEnable}
         isBusy={isBusy}
         busy={busy}
         runsCount={runs.length}
+        org={org}
+        onOpenOrg={() => setOrgOpen(true)}
         onRetryEnable={() => void onEnable()}
         onOpenRuns={() => openRunsSheet("all")}
         onOpenConfigure={() => setModal("configure")}
@@ -961,6 +1124,8 @@ export function ConsoleApp() {
             tables={tables}
             runsCount={runs.length}
             busy={busy}
+            watching={watching}
+            hasMemory={hasMemory}
             onOpenRuns={() => openRunsSheet("all")}
             onRequestDelete={requestDeleteRun}
           />
@@ -1016,9 +1181,9 @@ export function ConsoleApp() {
 
         {!booting &&
         job &&
-        (job.status === "running" ||
-          job.status === "queued" ||
-          job.status === "failed") ? (
+        (job.status === RUN_STATUS.RUNNING ||
+          job.status === RUN_STATUS.QUEUED ||
+          job.status === RUN_STATUS.FAILED) ? (
           <EnableLogCard job={job} />
         ) : null}
 
@@ -1107,6 +1272,8 @@ export function ConsoleApp() {
         onLoadTemplate={() => void onLoadTemplate()}
         onSelectTemplateAsIs={() => void onSelectTemplateAsIs()}
         onSaveProfile={() => void onSaveProfile()}
+        profileVersions={profileVersions}
+        onRestoreVersion={(version) => void onRestoreProfileVersion(version)}
       />
 
       <SetupLogDialog
@@ -1170,6 +1337,21 @@ export function ConsoleApp() {
           if (!open) setDeleteTarget(null);
         }}
         onConfirm={() => void confirmDeleteRun()}
+      />
+
+      <OrgDialog
+        open={orgOpen}
+        onOpenChange={setOrgOpen}
+        org={org}
+        orgs={orgs}
+        inviteCode={inviteCode}
+        busy={busy}
+        isBusy={isBusy}
+        onCreate={(name) => void onCreateOrg(name)}
+        onInvite={() => void onInviteOrg()}
+        onJoin={(code) => void onJoinOrg(code)}
+        onSelect={onSelectOrg}
+        onClear={onClearOrg}
       />
     </div>
   );

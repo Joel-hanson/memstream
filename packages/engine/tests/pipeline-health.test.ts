@@ -75,18 +75,30 @@ describe("derivePipelineHealth", () => {
     expect(h.connection.status).toBe("error");
   });
 
-  it("marks memory lagging when CDC is far ahead", () => {
+  it("marks memory lagging when recent CDC is far ahead", () => {
     const h = derivePipelineHealth({
       ...base,
-      latestChunkAt: "2026-08-08T11:00:00.000Z",
-      latestCdcAt: "2026-08-08T11:10:00.000Z",
+      latestChunkAt: "2026-08-08T11:50:00.000Z",
+      latestCdcAt: "2026-08-08T11:59:00.000Z",
     });
     expect(h.memory.lag_seconds).toBeGreaterThanOrEqual(MEMORY_LAG_WARN_SECONDS);
     expect(h.memory.status).toBe("warn");
     expect(h.status).toBe("degraded");
   });
 
-  it("warns when S3 has objects but no chunks while changefeed runs", () => {
+  it("does not degrade when shop is quiet (stale CDC backlog)", () => {
+    const h = derivePipelineHealth({
+      ...base,
+      latestChunkAt: "2026-08-08T10:00:00.000Z",
+      latestCdcAt: "2026-08-08T10:10:00.000Z",
+    });
+    expect(h.memory.lag_seconds).toBeGreaterThanOrEqual(MEMORY_LAG_WARN_SECONDS);
+    expect(h.memory.status).toBe("ok");
+    expect(h.memory.detail).toMatch(/Quiet/i);
+    expect(h.status).toBe("ok");
+  });
+
+  it("warns when S3 has recent objects but no chunks while changefeed runs", () => {
     const h = derivePipelineHealth({
       ...base,
       chunkCount: 0,
@@ -96,6 +108,19 @@ describe("derivePipelineHealth", () => {
     });
     expect(h.memory.status).toBe("warn");
     expect(h.status).toBe("degraded");
+  });
+
+  it("stays idle when CDC exists but shop has been quiet", () => {
+    const h = derivePipelineHealth({
+      ...base,
+      chunkCount: 0,
+      latestChunkAt: null,
+      s3Objects: 4,
+      latestCdcAt: "2026-08-08T10:00:00.000Z",
+    });
+    expect(h.memory.status).toBe("idle");
+    expect(h.memory.detail).toMatch(/Quiet|waiting for shop/i);
+    expect(h.status).toBe("ok");
   });
 
   it("warns when changefeed jobs exist but none are running", () => {

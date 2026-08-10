@@ -9,7 +9,8 @@ import type { Profile } from "./profile.js";
 import { resolveProfile } from "./profile-store.js";
 import { processCdcS3Object } from "./process-cdc.js";
 import type { Embedder, MemoryStore } from "./ports.js";
-import { buildKeyState, type KeyState } from "./state.js";
+import type { KeyState } from "./state.js";
+import { getPlatformState } from "./state-manager.js";
 
 type S3EventRecord = {
   s3?: {
@@ -78,7 +79,7 @@ async function getRuntime(): Promise<Runtime> {
       );
       const bucket = process.env.CDC_S3_BUCKET || "";
       const prefix = process.env.CDC_S3_PREFIX || "cdc/";
-      const state = await buildKeyState({
+      const state = await getPlatformState(root).cdcKeys({
         source: "s3",
         connectionId,
         bucket,

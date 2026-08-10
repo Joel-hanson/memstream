@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   RiArrowDownSLine,
   RiCheckLine,
@@ -10,7 +11,6 @@ import {
   RiRefreshLine,
   RiSettings3Line,
 } from "@remixicon/react";
-import { EnableResources } from "@/components/enable-resources";
 import { LogLines, MemoryChunkList } from "@/components/log-list";
 import { MemoryFlow } from "@/components/memory-flow";
 import { TermHint } from "@/components/term-hint";
@@ -25,16 +25,30 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { JobStatus, MemstreamRun, PipelineStatus } from "@/lib/types";
 import { cn, formatRelativeTime } from "@/lib/utils";
-import { runProfileLabel, runStatusLabel } from "./helpers";
+import {
+  resolveRunDisplayStatus,
+  runProfileLabel,
+  runStatusLabel,
+} from "./helpers";
 import type { BusyAction } from "./types";
 
 function healthBadgeVariant(
   status: string | undefined,
 ): "secondary" | "destructive" | "outline" {
   if (status === "ok") return "secondary";
-  if (status === "down" || status === "error" || status === "warn") {
+  if (
+    status === "down" ||
+    status === "error" ||
+    status === "warn" ||
+    status === "degraded"
+  ) {
     return "destructive";
   }
   return "outline";
@@ -74,7 +88,49 @@ function formatLag(seconds: number | null | undefined): string | null {
   const mins = Math.floor(seconds / 60);
   if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
-  return `${hours}h ${mins % 60}m`;
+  const rem = mins % 60;
+  return rem ? `${hours}h ${rem}m` : `${hours}h`;
+}
+
+function healthHeadline(
+  pipeline: PipelineStatus,
+  lagHuman: string | null,
+): string {
+  const health = pipeline.health;
+  if (health?.status === "down" || pipeline.db_error) {
+    return "Connection is down";
+  }
+  if (health?.memory.status === "warn" && lagHuman) {
+    return `Memory is ${lagHuman} behind live changes`;
+  }
+  if (health?.memory.status === "warn") {
+    return "Memory is behind live changes";
+  }
+  if (health?.status === "degraded") {
+    return "Connection is degraded";
+  }
+  if (health?.memory.detail?.toLowerCase().includes("quiet")) {
+    return health.memory.detail;
+  }
+  if (health?.status === "ok") {
+    return "Connected and catching memory writes";
+  }
+  return (
+    health?.connection.detail ||
+    pipeline.db_error ||
+    "From the latest pipeline refresh"
+  );
+}
+
+function healthHelper(
+  pipeline: PipelineStatus,
+  chunkCount: number,
+): string | null {
+  if (pipeline.health?.memory.status !== "warn") return null;
+  if (chunkCount > 0) {
+    return "Chunks exist, but newer DB changes aren't in memory yet.";
+  }
+  return "Changefeed is ahead of the memory worker.";
 }
 
 type FlowNode = {
@@ -95,6 +151,8 @@ export function RunSummaryCard({
   tables,
   runsCount,
   busy,
+  watching,
+  hasMemory,
   onOpenRuns,
   onRequestDelete,
 }: {
@@ -104,9 +162,15 @@ export function RunSummaryCard({
   tables: string;
   runsCount: number;
   busy: BusyAction;
+  watching?: boolean;
+  hasMemory?: boolean;
   onOpenRuns: () => void;
   onRequestDelete: (run: MemstreamRun, e?: React.MouseEvent) => void;
 }) {
+  const displayStatus = resolveRunDisplayStatus(activeRun, job, {
+    watching,
+    hasMemory,
+  });
   return (
     <Card size="sm">
       <CardHeader className="flex-row items-start justify-between gap-2">
@@ -139,14 +203,14 @@ export function RunSummaryCard({
           ) : null}
           <Badge
             variant={
-              (activeRun?.status || job?.status) === "succeeded"
+              displayStatus === "succeeded"
                 ? "secondary"
-                : (activeRun?.status || job?.status) === "failed"
+                : displayStatus === "failed"
                   ? "destructive"
                   : "outline"
             }
           >
-            {runStatusLabel(activeRun?.status || job?.status || "…")}
+            {runStatusLabel(displayStatus)}
           </Badge>
           {activeRun ? (
             <Button
@@ -269,6 +333,34 @@ export function LivePanel({
   onCopyMcp: () => void;
   onNodeClick: (node: { id?: string; href?: string }) => void;
 }) {
+  const health = pipeline?.health;
+  const lagSeconds =
+    health?.memory.lag_seconds ?? metrics?.lag_seconds ?? null;
+  const lagHuman = formatLag(lagSeconds);
+  const chunkCount = metrics?.chunks ?? recentChunks.length;
+  const isLagging = health?.memory.status === "warn";
+  const isUnhealthy =
+    health?.status === "degraded" ||
+    health?.status === "down" ||
+    Boolean(pipeline?.db_error);
+  const latestCdcAt = health?.memory.latest_cdc_at ?? metrics?.latest_cdc_at;
+  const latestChunkAt =
+    health?.memory.latest_chunk_at ?? metrics?.latest_at ?? null;
+  const headline = pipeline
+    ? healthHeadline(pipeline, lagHuman)
+    : null;
+  const helper = pipeline ? healthHelper(pipeline, chunkCount) : null;
+
+  // Fold like Pipeline: collapsed when healthy, forced open when degraded/down.
+  const [healthOpen, setHealthOpen] = useState(isUnhealthy);
+  useEffect(() => {
+    if (isUnhealthy) setHealthOpen(true);
+  }, [isUnhealthy]);
+
+  const openWorker = () => {
+    if (!wiringOpen) onToggleWiring();
+  };
+
   return (
     <>
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -322,73 +414,164 @@ export function LivePanel({
       </div>
 
       {pipeline ? (
-        <Card size="sm">
-          <CardHeader className="flex-row items-start justify-between gap-2">
-            <div className="min-w-0 space-y-1">
-              <CardTitle className="text-sm">Connection health</CardTitle>
-              <CardDescription>
-                {pipeline.health?.connection.detail ||
-                  (pipeline.db_error
-                    ? pipeline.db_error
-                    : "From the latest pipeline refresh")}
-              </CardDescription>
+        <div
+          className={cn(
+            "border",
+            isUnhealthy &&
+              (health?.status === "down" || pipeline.db_error
+                ? "border-destructive/50 bg-destructive/5"
+                : "border-destructive/35 bg-destructive/3"),
+          )}
+        >
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-start justify-between gap-3 px-3 py-2.5 text-left hover:bg-muted/40"
+            onClick={() => setHealthOpen((o) => !o)}
+            aria-expanded={healthOpen}
+          >
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Connection health
+                </span>
+                <Badge variant={healthBadgeVariant(health?.status)}>
+                  {healthLabel(health?.status)}
+                </Badge>
+              </div>
+              <p className="truncate text-xs text-foreground/90">{headline}</p>
             </div>
-            <Badge variant={healthBadgeVariant(pipeline.health?.status)}>
-              {healthLabel(pipeline.health?.status)}
-            </Badge>
-          </CardHeader>
-          <CardContent>
-            <ul className="grid gap-2 text-xs sm:grid-cols-3">
-              {[
-                {
-                  key: "db" as const,
-                  label: "App DB",
-                  status: pipeline.health?.connection.status,
-                  detail: pipeline.health?.connection.detail,
-                },
-                {
-                  key: "cf" as const,
-                  label: "Changefeed",
-                  status: pipeline.health?.changefeed.status,
-                  detail: pipeline.health?.changefeed.detail,
-                },
-                {
-                  key: "mem" as const,
-                  label: "Memory lag",
-                  status: pipeline.health?.memory.status,
-                  detail: (() => {
-                    const lag = formatLag(
-                      pipeline.health?.memory.lag_seconds ??
-                        metrics?.lag_seconds,
-                    );
-                    const base =
-                      pipeline.health?.memory.detail ||
-                      "Waiting for pipeline data";
-                    return lag ? `${base} · ${lag}` : base;
-                  })(),
-                },
-              ].map((row) => (
-                <li
-                  key={row.key}
-                  className="min-w-0 border border-border/80 bg-muted/20 px-2.5 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">{row.label}</span>
-                    <Badge
-                      variant={healthBadgeVariant(row.status)}
-                      className="shrink-0"
-                    >
-                      {checkLabel(row.status, row.key)}
-                    </Badge>
+            <RiArrowDownSLine
+              className={cn(
+                "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
+                healthOpen && "rotate-180",
+              )}
+            />
+          </button>
+          {healthOpen ? (
+            <div className="space-y-3 border-t px-3 py-3">
+              {helper ? (
+                <p className="text-xs text-muted-foreground">{helper}</p>
+              ) : null}
+              <ul className="grid gap-2 text-xs sm:grid-cols-3">
+                {[
+                  {
+                    key: "db" as const,
+                    label: "App DB",
+                    status: health?.connection.status,
+                    detail: health?.connection.detail,
+                    warn: health?.connection.status === "error",
+                  },
+                  {
+                    key: "cf" as const,
+                    label: "Changefeed",
+                    status: health?.changefeed.status,
+                    detail: health?.changefeed.detail,
+                    warn: health?.changefeed.status === "warn",
+                  },
+                  {
+                    key: "mem" as const,
+                    label: "Memory",
+                    status: health?.memory.status,
+                    detail: (() => {
+                      if (isLagging && lagHuman) return `${lagHuman} behind`;
+                      if (health?.memory.status === "ok") {
+                        return lagHuman && lagSeconds && lagSeconds > 0
+                          ? `Up to date (${lagHuman})`
+                          : "Up to date";
+                      }
+                      return (
+                        health?.memory.detail || "Waiting for pipeline data"
+                      );
+                    })(),
+                    warn: isLagging,
+                    title:
+                      lagSeconds != null
+                        ? `${lagSeconds}s behind CDC`
+                        : undefined,
+                  },
+                ].map((row) => (
+                  <li
+                    key={row.key}
+                    className={cn(
+                      "min-w-0 border border-border/80 bg-muted/20 px-2.5 py-2",
+                      row.warn && "border-destructive/40 bg-destructive/5",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">{row.label}</span>
+                      <Badge
+                        variant={healthBadgeVariant(row.status)}
+                        className="shrink-0"
+                      >
+                        {checkLabel(row.status, row.key)}
+                      </Badge>
+                    </div>
+                    {row.key === "mem" && row.title ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <p className="mt-1 truncate text-foreground/90">
+                            {row.detail || "—"}
+                          </p>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={6}>
+                          {row.title}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <p className="mt-1 truncate text-foreground/90">
+                        {row.detail || "—"}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              {(latestCdcAt || latestChunkAt) && (
+                <dl className="grid gap-1 text-[0.7rem] text-muted-foreground sm:grid-cols-2">
+                  <div className="flex min-w-0 justify-between gap-2 border border-border/60 px-2 py-1.5">
+                    <dt>Last CDC</dt>
+                    <dd className="truncate text-foreground/90">
+                      {latestCdcAt
+                        ? formatRelativeTime(latestCdcAt) || latestCdcAt
+                        : "—"}
+                    </dd>
                   </div>
-                  <p className="mt-1 truncate text-foreground/90">
-                    {row.detail || "—"}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+                  <div className="flex min-w-0 justify-between gap-2 border border-border/60 px-2 py-1.5">
+                    <dt>Last memory</dt>
+                    <dd className="truncate text-foreground/90">
+                      {latestChunkAt
+                        ? formatRelativeTime(latestChunkAt) || latestChunkAt
+                        : "—"}
+                    </dd>
+                  </div>
+                </dl>
+              )}
+
+              {isLagging || isUnhealthy ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={openWorker}
+                  >
+                    Check worker
+                  </Button>
+                  {hasSetupLog ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={onOpenSetupLog}
+                    >
+                      View setup log
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <Card>
@@ -682,5 +865,3 @@ export function FlowPrimaryCta({
     </Button>
   );
 }
-
-export { EnableResources };

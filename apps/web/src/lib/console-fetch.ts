@@ -1,4 +1,6 @@
-/** Browser fetch wrapper that sends the optional console token. */
+/** Browser fetch wrapper that sends the optional console token + org context. */
+
+import { readStoredOrgId } from "@/lib/org-session";
 
 function bearerToken(): string {
   return (
@@ -8,16 +10,19 @@ function bearerToken(): string {
   );
 }
 
-/** fetch() with Authorization Bearer when NEXT_PUBLIC_MEMSTREAM_CONSOLE_TOKEN is set. */
+/** fetch() with Authorization Bearer and X-Memstream-Org when set. */
 export function consoleFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const token = bearerToken();
-  if (!token) return fetch(input, init);
   const headers = new Headers(init?.headers);
-  if (!headers.has("Authorization")) {
+  const token = bearerToken();
+  if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  const orgId = readStoredOrgId();
+  if (orgId && !headers.has("X-Memstream-Org")) {
+    headers.set("X-Memstream-Org", orgId);
   }
   return fetch(input, { ...init, headers });
 }

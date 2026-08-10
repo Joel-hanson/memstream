@@ -4,6 +4,7 @@ import {
   BedrockRuntimeClient,
   InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import { resilientBedrock, withResilience } from "./resilience.js";
 
 export type BedrockInvokeClient = {
   send: (command: InvokeModelCommand) => Promise<{
@@ -43,13 +44,15 @@ export class BedrockEmbedder {
       normalize: true,
     });
 
-    const response = await this.client.send(
-      new InvokeModelCommand({
-        modelId: this.modelId,
-        body: Buffer.from(body),
-        contentType: "application/json",
-        accept: "application/json",
-      }),
+    const response = await withResilience(resilientBedrock, () =>
+      this.client.send(
+        new InvokeModelCommand({
+          modelId: this.modelId,
+          body: Buffer.from(body),
+          contentType: "application/json",
+          accept: "application/json",
+        }),
+      ),
     );
 
     const rawBody = await readBody(response.body);

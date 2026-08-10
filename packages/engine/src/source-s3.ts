@@ -8,6 +8,7 @@ import {
 import { parseCdcPayload, tableFromKey } from "./cdc-parse.js";
 import type { ChangeEvent } from "./models.js";
 import { ProcessedState, type KeyState } from "./state.js";
+import { resilientS3, withResilience } from "./resilience.js";
 
 export type S3ListClient = {
   send: (
@@ -56,12 +57,14 @@ export class S3EventSource {
     let continuation: string | undefined;
 
     while (true) {
-      const page = (await client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: this.prefix,
-          ContinuationToken: continuation,
-        }),
+      const page = (await withResilience(resilientS3, () =>
+        client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucket,
+            Prefix: this.prefix,
+            ContinuationToken: continuation,
+          }),
+        ),
       )) as {
         Contents?: { Key?: string }[];
         IsTruncated?: boolean;
@@ -73,9 +76,13 @@ export class S3EventSource {
         if (!key || key.endsWith("/")) continue;
         if (this.state.seen(key)) continue;
 
-        const obj = (await client.send(
-          new GetObjectCommand({ Bucket: this.bucket, Key: key }),
-        )) as { Body?: { transformToString?: (enc?: string) => Promise<string> } };
+        const obj = (await withResilience(resilientS3, () =>
+          client.send(
+            new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+          ),
+        )) as {
+          Body?: { transformToString?: (enc?: string) => Promise<string> };
+        };
 
         let text = "";
         if (obj.Body && typeof obj.Body.transformToString === "function") {

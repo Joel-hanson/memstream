@@ -3,8 +3,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { WORKER_COMPUTE, type WorkerComputeKind } from "./constants.js";
 
-export type WorkerCompute = "ec2" | "lambda";
+export type WorkerCompute = WorkerComputeKind;
+
+export { WORKER_COMPUTE };
 
 function readEnvFileValue(root: string, key: string): string {
   const path = join(root, ".env");
@@ -33,7 +36,12 @@ export function resolveWorkerCompute(
   override?: string,
 ): WorkerCompute {
   const fromOverride = (override || "").trim().toLowerCase();
-  if (fromOverride === "lambda" || fromOverride === "ec2") return fromOverride;
+  if (
+    fromOverride === WORKER_COMPUTE.LAMBDA ||
+    fromOverride === WORKER_COMPUTE.EC2
+  ) {
+    return fromOverride;
+  }
   let raw = (env.MEMSTREAM_WORKER_COMPUTE || "").trim().toLowerCase();
   if (!raw && root) {
     raw = readEnvFileValue(root, "MEMSTREAM_WORKER_COMPUTE")
@@ -41,7 +49,9 @@ export function resolveWorkerCompute(
       .toLowerCase();
   }
   // Unset → managed Lambda (SaaS default). Explicit "ec2" for self-host/demo.
-  return raw === "ec2" ? "ec2" : "lambda";
+  return raw === WORKER_COMPUTE.EC2
+    ? WORKER_COMPUTE.EC2
+    : WORKER_COMPUTE.LAMBDA;
 }
 
 /**
@@ -72,9 +82,9 @@ export function cloudWorkerStackName(
   compute: WorkerCompute = resolveWorkerCompute(),
 ): string {
   const name = (base || "memstream-demo").trim() || "memstream-demo";
-  return compute === "lambda" ? `${name}-lambda` : name;
+  return compute === WORKER_COMPUTE.LAMBDA ? `${name}-lambda` : name;
 }
 
 export function workerComputeLabel(compute: WorkerCompute): string {
-  return compute === "lambda" ? "Managed Lambda" : "EC2";
+  return compute === WORKER_COMPUTE.LAMBDA ? "Managed Lambda" : "EC2";
 }

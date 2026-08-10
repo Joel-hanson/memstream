@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import type { JobStatus } from "@/lib/types";
 import { Advanced } from "./advanced";
+import { RUN_STATUS, WORKER_COMPUTE } from "./constants";
 import type { BusyAction, WorkerCompute } from "./types";
 
 type EnableProgress = {
@@ -92,7 +93,7 @@ export function EnableModal({
           <DialogTitle>
             {enableProgress.phase === "running"
               ? "Enabling Memstream"
-              : enableProgress.phase === "succeeded"
+              : enableProgress.phase === RUN_STATUS.SUCCEEDED
                 ? "Memstream is enabled"
                 : enableProgress.phase === "failed"
                   ? "Enable failed"
@@ -105,12 +106,12 @@ export function EnableModal({
                     ? `: ${enableProgress.current.label}`
                     : ""
                 }`
-              : enableProgress.phase === "succeeded"
+              : enableProgress.phase === RUN_STATUS.SUCCEEDED
                 ? "Ship an order in the shop, then ask from Cursor."
                 : enableProgress.phase === "failed"
                   ? enableProgress.headline
                   : deploy
-                    ? workerCompute === "lambda"
+                    ? workerCompute === WORKER_COMPUTE.LAMBDA
                       ? "Indexes watched tables and starts a managed Lambda worker on your CDC bucket."
                       : "Indexes watched tables and starts an EC2 memory worker (self-host / demo)."
                     : "Indexes watched tables. Run the worker locally afterward."}
@@ -121,7 +122,7 @@ export function EnableModal({
           {enableProgress.phase === "idle" ? (
             <p className="border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               {deploy ? (
-                workerCompute === "lambda" ? (
+                workerCompute === WORKER_COMPUTE.LAMBDA ? (
                   <>
                     <span className="text-foreground">Managed Lambda</span> is
                     the default cloud worker — S3-triggered, no EC2 box to
@@ -196,7 +197,7 @@ export function EnableModal({
 
           {job?.log?.length &&
           (enableProgress.phase === "failed" ||
-            enableProgress.phase === "succeeded") ? (
+            enableProgress.phase === RUN_STATUS.SUCCEEDED) ? (
             <LogLines lines={job.log} maxHeightClass="max-h-48" />
           ) : null}
 
@@ -249,12 +250,12 @@ export function EnableModal({
                     value={workerCompute}
                     onChange={(e) =>
                       onWorkerComputeChange(
-                        e.target.value === "ec2" ? "ec2" : "lambda",
+                        e.target.value === WORKER_COMPUTE.EC2 ? WORKER_COMPUTE.EC2 : WORKER_COMPUTE.LAMBDA,
                       )
                     }
                   >
-                    <option value="lambda">Managed Lambda (recommended)</option>
-                    <option value="ec2">EC2 (self-host / demo)</option>
+                    <option value={WORKER_COMPUTE.LAMBDA}>Managed Lambda (recommended)</option>
+                    <option value={WORKER_COMPUTE.EC2}>EC2 (self-host / demo)</option>
                   </select>
                 </Field>
               ) : null}
@@ -263,7 +264,7 @@ export function EnableModal({
         </div>
 
         <DialogFooter className="shrink-0">
-          {enableProgress.phase === "succeeded" ? (
+          {enableProgress.phase === RUN_STATUS.SUCCEEDED ? (
             <Button type="button" onClick={onClose}>
               Back to Live
             </Button>
