@@ -11,7 +11,7 @@ type RateLimitOptions = {
 
 const DEFAULT: RateLimitOptions = {
   intervalMs: 60_000,
-  maxRequests: 120,
+  maxRequests: 180,
   maxTokens: 500,
 };
 
@@ -57,6 +57,13 @@ const heavyLimiter = new RateLimiter({
   maxTokens: 200,
 });
 
+/** Status polls (pipeline + job) share a looser budget so Enable watch does not 429. */
+const pollLimiter = new RateLimiter({
+  intervalMs: 60_000,
+  maxRequests: 600,
+  maxTokens: 200,
+});
+
 function clientToken(req: Request): string {
   const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   const realIp = req.headers.get("x-real-ip")?.trim();
@@ -66,12 +73,14 @@ function clientToken(req: Request): string {
 /**
  * Returns a 429 Response when over limit, else null.
  * @param heavy Use tighter budget for Enable / propose.
+ * @param poll Use looser budget for job/pipeline status polling.
  */
 export function checkRateLimit(
   req: Request,
   heavy = false,
+  poll = false,
 ): Response | null {
-  const limiter = heavy ? heavyLimiter : consoleLimiter;
+  const limiter = heavy ? heavyLimiter : poll ? pollLimiter : consoleLimiter;
   const result = limiter.check(clientToken(req));
   if (result.ok) return null;
   return Response.json(

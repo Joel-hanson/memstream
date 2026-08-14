@@ -38,6 +38,75 @@ describe("profile / rules / template", () => {
     expect(matched.map((r) => r.name)).toContain("order_status_change");
   });
 
+  it("does not treat changefeed initial scans as stock or order column changes", () => {
+    const profile = loadProfile(join(FIXTURES, "commerce.yaml"));
+    const stockScan: ChangeEvent = {
+      table: "stock",
+      key: { sku: "SKU-12" },
+      before: null,
+      after: { sku: "SKU-12", warehouse_id: "east", quantity: 40 },
+      timestamp: "t",
+    };
+    const orderScan: ChangeEvent = {
+      table: "orders",
+      key: { id: "90" },
+      before: {},
+      after: {
+        id: "90",
+        customer_id: "c1",
+        status: "shipped",
+        sku: "SKU-12",
+        quantity: 1,
+      },
+      timestamp: "t",
+    };
+    expect(matchRules(profile, stockScan).map((r) => r.name)).not.toContain(
+      "stock_drop",
+    );
+    expect(matchRules(profile, orderScan).map((r) => r.name)).not.toContain(
+      "order_status_change",
+    );
+  });
+
+  it("indexes new order inserts as order_placed", () => {
+    const profile = loadProfile(join(FIXTURES, "commerce.yaml"));
+    const placed: ChangeEvent = {
+      table: "orders",
+      key: { id: "103" },
+      before: null,
+      after: {
+        id: "103",
+        customer_id: "c1",
+        status: "pending",
+        sku: "SKU-21",
+        quantity: 1,
+      },
+      timestamp: "t",
+    };
+    expect(matchRules(profile, placed).map((r) => r.name)).toEqual([
+      "order_placed",
+    ]);
+  });
+
+  it("still indexes ticket inserts (Report damage)", () => {
+    const profile = loadProfile(join(FIXTURES, "commerce.yaml"));
+    const opened: ChangeEvent = {
+      table: "tickets",
+      key: { id: "t-1" },
+      before: null,
+      after: {
+        id: "t-1",
+        order_id: "100",
+        status: "open",
+        body: "damaged",
+      },
+      timestamp: "t",
+    };
+    expect(matchRules(profile, opened).map((r) => r.name)).toContain(
+      "ticket_opened",
+    );
+  });
+
   it("renders chunk templates", () => {
     const event: ChangeEvent = {
       table: "orders",

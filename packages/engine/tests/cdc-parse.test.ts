@@ -62,6 +62,18 @@ describe("cdc parse", () => {
     expect(tableFromKey(key)).toBe("orders");
   });
 
+  it("infers table when Cockroach descriptor id is hex", () => {
+    const key =
+      "cdc/2026-08-14/" +
+      "202608140631580000000000000000001-a7f4bb1bb1c3fefc-1-10-0000000e-orders-b.ndjson";
+    expect(tableFromKey(key)).toBe("orders");
+    expect(
+      tableFromKey(
+        "cdc/2026-08-14/202608140625220000000000000000001-a7f4bb1bb1c3fefc-1-10-0000000c-case_notes-1.ndjson",
+      ),
+    ).toBe("case_notes");
+  });
+
   it("skips missing table without raising", () => {
     expect(parseCdcRecord({ after: { id: "1" } })).toBeNull();
   });

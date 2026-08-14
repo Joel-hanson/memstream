@@ -4,8 +4,10 @@ import { basename } from "node:path";
 import type { ChangeEvent, JsonObject, JsonValue } from "./models.js";
 import { normalizeSourceTs } from "./timestamps.js";
 
+// Cockroach cloud-storage files: …-{table}-{descriptorId}.ndjson
+// Descriptor ids are hex (e.g. orders-1, orders-b, case_notes-1a).
 const CRDB_FILE =
-  /^(?<head>.+)-(?<topic>[A-Za-z_][A-Za-z0-9_]*)-(?<schema>\d+)$/;
+  /^(?<head>.+)-(?<topic>[A-Za-z_][A-Za-z0-9_]*)-(?<schema>[0-9a-fA-F]+)$/;
 
 export function tableFromKey(key: string): string | null {
   const normalized = key.replace(/\\/g, "/");
@@ -25,7 +27,7 @@ export function tableFromKey(key: string): string | null {
     const segs = stem.split("-");
     if (
       segs.length >= 2 &&
-      /^\d+$/.test(segs[segs.length - 1]!) &&
+      /^[0-9a-fA-F]+$/.test(segs[segs.length - 1]!) &&
       looksLikeTable(segs[segs.length - 2]!)
     ) {
       return segs[segs.length - 2]!;

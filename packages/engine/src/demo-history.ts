@@ -20,12 +20,20 @@ export type DemoHistorySeed = {
 /** Past chapters that should exist before the live order-100 drama. */
 export const DEMO_HISTORY_SEEDS: DemoHistorySeed[] = [
   {
+    tableName: "case_notes",
+    ruleName: "support_handoff",
+    tags: ["support", "handoff", "conversation", "availability", "history"],
+    body: `Case note n-89 (staff) for order 90 ticket t-90:
+Alex (c1) mentioned they're away Monday-Friday for work and can only receive or hand off packages on weekends; that's why the order 90 redelivery moved to Saturday. Noting for future scheduling. (2026-06-30T10:00:00Z)`,
+    sourceTs: "2026-06-30T10:00:00.000Z",
+  },
+  {
     tableName: "orders",
     ruleName: "order_status_change",
     tags: ["order", "status", "shipping", "history"],
-    body: `Order 90 (SKU-12 × 1) for customer c1
+    body: `Order 90 (SKU-12 × 1) for customer c1 (Alex)
 status pending → shipped at 2026-07-01T14:00:00Z.
-Note: Shipped 1× SKU-12 for Alex`,
+Note: Shipped 1× SKU-12 for Alex (c1)`,
     sourceTs: "2026-07-01T14:00:00.000Z",
   },
   {
@@ -33,7 +41,7 @@ Note: Shipped 1× SKU-12 for Alex`,
     ruleName: "ticket_opened",
     tags: ["support", "ticket", "complaint", "history"],
     body: `Support ticket t-90 for order 90 is closed:
-Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed. (2026-07-02T09:15:00Z)`,
+Alex (c1) reported late delivery on Field Lamp order 90 after asking for weekend delivery since they're away on weekdays; shipping credit issued and case closed. (2026-07-02T09:15:00Z)`,
     sourceTs: "2026-07-02T09:15:00.000Z",
   },
   {
@@ -41,7 +49,7 @@ Alex reported late delivery on Field Lamp order 90; shipping credit issued and c
     ruleName: "support_handoff",
     tags: ["support", "handoff", "conversation", "history"],
     body: `Case note n-90 (staff) for order 90 ticket t-90:
-Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens. (2026-07-02T10:00:00Z)`,
+Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens. (2026-07-02T10:00:00Z)`,
     sourceTs: "2026-07-02T10:00:00.000Z",
   },
 ];

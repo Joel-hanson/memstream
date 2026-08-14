@@ -104,25 +104,32 @@ INSERT INTO orders (id, customer_id, status, sku, quantity) VALUES
   ('101', 'c2', 'pending', 'SKU-99', 1)
 ON CONFLICT (id) DO NOTHING;
 
-UPDATE orders SET note = 'Shipped 1× SKU-12 for Alex'
-WHERE id = '90' AND (note IS NULL OR note = '');
+UPDATE orders SET note = 'Shipped 1× SKU-12 for Alex (c1)'
+WHERE id = '90' AND (note IS NULL OR note = '' OR note = 'Shipped 1× SKU-12 for Alex');
 
 INSERT INTO tickets (id, order_id, status, body) VALUES
   (
     't-90',
     '90',
     'closed',
-    'Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.'
+    'Alex (c1) reported late delivery on Field Lamp order 90 after asking for weekend delivery since they''re away on weekdays; shipping credit issued and case closed.'
   )
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO case_notes (id, order_id, ticket_id, author, body) VALUES
   (
+    'n-89',
+    '90',
+    't-90',
+    'staff',
+    'Alex (c1) mentioned they''re away Monday-Friday for work and can only receive or hand off packages on weekends; that''s why the order 90 redelivery moved to Saturday. Noting for future scheduling.'
+  ),
+  (
     'n-90',
     '90',
     't-90',
     'staff',
-    'Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
+    'Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
   )
 ON CONFLICT (id) DO NOTHING;
 

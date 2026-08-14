@@ -24,6 +24,8 @@ export type DefaultsResponse = {
   platform_configured?: boolean;
   worker_compute?: "ec2" | "lambda";
   source?: string;
+  demo_available?: boolean;
+  is_demo?: boolean;
 };
 
 export type RunsListResponse = {
@@ -81,10 +83,17 @@ export type UpsertConnectionResponse = {
   detail?: string;
 };
 
+export type ConnectionsListResponse = {
+  configured?: boolean;
+  connections?: PublicConnection[];
+  detail?: string;
+};
+
 export type ProposeBody = {
   connection_id?: string;
   database_url?: string;
   application?: string;
+  tables?: string[];
 };
 
 export type ProposeResponse = {
@@ -267,10 +276,74 @@ export const consoleApi = {
   },
 
   connection: {
+    list: () => apiRequest<ConnectionsListResponse>("/api/connection"),
+    activate: (id: string, orgId?: string) =>
+      apiRequest<UpsertConnectionResponse>(
+        "/api/connection",
+        jsonInit("POST", { id, org_id: orgId }),
+      ),
     put: (body: UpsertConnectionBody) =>
       apiRequest<UpsertConnectionResponse>(
         "/api/connection",
         jsonInit("PUT", body),
+      ),
+    useDemo: () =>
+      apiRequest<UpsertConnectionResponse>(
+        "/api/connection/demo",
+        jsonInit("POST"),
+      ),
+  },
+
+  cockroachCloud: {
+    listClusters: (apiKey: string) =>
+      apiRequest<{ clusters?: Array<{ id: string; name: string; state?: string }> }>(
+        "/api/cockroach-cloud",
+        jsonInit("POST", { action: "list_clusters", api_key: apiKey }),
+      ),
+    listSqlUsers: (apiKey: string, clusterId: string) =>
+      apiRequest<{ users?: Array<{ name: string }> }>(
+        "/api/cockroach-cloud",
+        jsonInit("POST", {
+          action: "list_sql_users",
+          api_key: apiKey,
+          cluster_id: clusterId,
+        }),
+      ),
+    listDatabases: (apiKey: string, clusterId: string) =>
+      apiRequest<{ databases?: string[] }>("/api/cockroach-cloud", jsonInit("POST", {
+        action: "list_databases",
+        api_key: apiKey,
+        cluster_id: clusterId,
+      })),
+    preview: (body: {
+      api_key: string;
+      cluster_id: string;
+      database?: string;
+      sql_user: string;
+      password: string;
+    }) =>
+      apiRequest<{
+        database?: string;
+        databases?: string[];
+        tables?: string[];
+        table_count?: number;
+      }>("/api/cockroach-cloud", jsonInit("POST", { action: "preview", ...body })),
+    save: (body: {
+      api_key: string;
+      cluster_id: string;
+      database?: string;
+      sql_user: string;
+      password: string;
+      bucket?: string;
+      region?: string;
+      prefix?: string;
+      id?: string;
+      name?: string;
+      org_id?: string;
+    }) =>
+      apiRequest<UpsertConnectionResponse>(
+        "/api/cockroach-cloud",
+        jsonInit("POST", { action: "save", ...body }),
       ),
   },
 

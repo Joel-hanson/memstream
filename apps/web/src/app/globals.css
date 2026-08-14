@@ -104,6 +104,23 @@
   animation: pulse-dot 1.6s ease-in-out infinite;
 }
 
+@keyframes memory-in {
+  0%,
+  40% {
+    background-color: color-mix(in oklch, var(--primary) 12%, transparent);
+  }
+  20% {
+    background-color: color-mix(in oklch, var(--primary) 4%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-memory-in {
+  animation: memory-in 0.7s ease-out 2;
+}
+
 .dark {
   --background: oklch(0.147 0.004 49.3);
   --foreground: oklch(0.986 0.002 67.8);

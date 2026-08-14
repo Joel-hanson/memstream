@@ -225,7 +225,7 @@ make changefeed-dry && make changefeed
 | Enable on EC2: `Missing template …/infra/ec2.yaml` | EC2 redeploy is skipped on prebuilt; for Lambda, redeploy so the artifact includes `infra/lambda.yaml` + `deploy/memstream-lambda.zip`. From a laptop: `make synth-infra` if YAML is missing. |
 | Edit EC2/Lambda infra | Change `infra/cdk/` (TypeScript), run `make synth-infra`, then deploy/Enable |
 | Enable on EC2: `s3:PutObject` AccessDenied | InstanceRole needs write on `${CDC_S3_PREFIX}*` — update stack (`make deploy-aws`); IAM applies without replace |
-| ShopUrl unreachable | Wait for userdata; check console for `next build` errors; confirm `SHOP_CIDR` includes your IP |
+| ShopUrl / ConsoleUrl unreachable | Wait for userdata + Let's Encrypt (~2–4 min); open `https://…sslip.io` (not raw `:8080`); confirm `SHOP_CIDR` includes your IP; check `journalctl -u caddy` |
 | No S3 objects | Changefeed job; sink IAM / `MEMSTREAM_CDC_ROLE_ARN`; table names |
 | Chunks empty | Profile rules; `diff`; cursor skipping keys |
 | Control plane probe | `curl -s http://localhost:3000/api/health` — expects `platform_db` healthy |

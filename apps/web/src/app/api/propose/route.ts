@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     database_url?: string;
     connection_id?: string;
     application?: string;
+    tables?: string[];
   } | null;
 
   const resolved = await resolveRequestDatabaseUrl({
@@ -30,6 +31,7 @@ export async function POST(req: Request) {
       await proposeFromDatabase({
         databaseUrl: resolved.databaseUrl,
         application: body?.application?.trim() || "discovered-app",
+        includeTables: Array.isArray(body?.tables) ? body.tables : undefined,
       }),
     );
   } catch (err) {

@@ -1,15 +1,21 @@
 import { handleMcpFetchRequest, resolveMcpRuntime } from "@memstream/mcp";
 import { webRepoRoot } from "@/lib/api";
 import { loadConnectDefaults } from "@/lib/env-defaults";
+import { requireMcpAuth } from "@/lib/mcp-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * Memstream MCP over Streamable HTTP.
- * Cursor: { "mcpServers": { "memstream": { "url": "http://127.0.0.1:3000/api/mcp" } } }
+ * Cursor: url + optional Authorization (Basic demo:demo or Bearer token).
  */
 async function handle(req: Request): Promise<Response> {
+  if (req.method !== "OPTIONS") {
+    const denied = await requireMcpAuth(req);
+    if (denied) return denied;
+  }
+
   const defaults = await loadConnectDefaults();
   const runtime = await resolveMcpRuntime({
     root: webRepoRoot(),
@@ -17,7 +23,13 @@ async function handle(req: Request): Promise<Response> {
     connectionId: defaults.connection_id || undefined,
     awsRegion: defaults.region || undefined,
   });
-  return handleMcpFetchRequest(req, runtime.embedder, runtime.store);
+  return handleMcpFetchRequest(req, {
+    embedder: runtime.embedder,
+    store: runtime.store,
+    databaseUrl: runtime.databaseUrl,
+    connectionId: runtime.connectionId,
+    root: webRepoRoot(),
+  });
 }
 
 export async function GET(req: Request) {

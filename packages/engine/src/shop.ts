@@ -52,6 +52,12 @@ function customerName(customerId: string): string {
   return CUSTOMER_NAMES[customerId] ?? customerId;
 }
 
+/** Name plus id so agents don't mix this Alex up with another. */
+function customerMemoryLabel(customerId: string): string {
+  const name = CUSTOMER_NAMES[customerId];
+  return name ? `${name} (${customerId})` : customerId;
+}
+
 function nextTicketId(existingIds: string[]): string {
   let max = 0;
   for (const id of existingIds) {
@@ -77,13 +83,20 @@ function nextCaseNoteId(existingIds: string[]): string {
 }
 
 function defaultTicketBody(order: JsonRow): string {
-  const customer = customerName(String(order.customer_id ?? ""));
+  const customerId = String(order.customer_id ?? "");
+  const customer = customerMemoryLabel(customerId);
   const sku =
     order.sku != null && String(order.sku).trim()
       ? String(order.sku)
       : "the item";
   const orderId = String(order.id);
-  return `${customer} reports ${sku} arrived damaged after order ${orderId} shipped - please investigate.`;
+  const base = `${customer} reports ${sku} arrived damaged after order ${orderId} shipped - please investigate.`;
+  // Alex's known weekday unavailability (from order 90 history) auto-schedules
+  // pickup for the weekend — demo hook for a stale-preference correction.
+  if (customerId === "c1") {
+    return `${base} Pickup scheduled for the weekend, since ${customer} is usually away on weekdays.`;
+  }
+  return base;
 }
 
 export interface Shop {
@@ -223,7 +236,7 @@ export class InMemoryShop implements Shop {
         id: "90",
         customer_id: "c1",
         status: "shipped",
-        note: "Shipped 1× SKU-12 for Alex",
+        note: "Shipped 1× SKU-12 for Alex (c1)",
         sku: "SKU-12",
         quantity: 1,
       },
@@ -255,16 +268,23 @@ export class InMemoryShop implements Shop {
         id: "t-90",
         order_id: "90",
         status: "closed",
-        body: "Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.",
+        body: "Alex (c1) reported late delivery on Field Lamp order 90 after asking for weekend delivery since they're away on weekdays; shipping credit issued and case closed.",
       },
     };
     this.caseNotes = {
+      "n-89": {
+        id: "n-89",
+        order_id: "90",
+        ticket_id: "t-90",
+        author: "staff",
+        body: "Alex (c1) mentioned they're away Monday-Friday for work and can only receive or hand off packages on weekends; that's why the order 90 redelivery moved to Saturday. Noting for future scheduling.",
+      },
       "n-90": {
         id: "n-90",
         order_id: "90",
         ticket_id: "t-90",
         author: "staff",
-        body: "Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.",
+        body: "Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.",
       },
     };
     this.users = {
@@ -329,7 +349,7 @@ export class InMemoryShop implements Shop {
       order.quantity != null && order.quantity !== ""
         ? Number(order.quantity)
         : null;
-    const who = customerName(String(order.customer_id ?? ""));
+    const who = customerMemoryLabel(String(order.customer_id ?? ""));
     order.note =
       sku && qty != null && Number.isFinite(qty)
         ? `Shipped ${qty}× ${sku} for ${who}`
@@ -597,7 +617,7 @@ export class CockroachShop implements Shop {
           ON CONFLICT (sku) DO NOTHING`);
         await client.query(`
           INSERT INTO orders (id, customer_id, status, sku, quantity, note) VALUES
-            ('90', 'c1', 'shipped', 'SKU-12', 1, 'Shipped 1× SKU-12 for Alex'),
+            ('90', 'c1', 'shipped', 'SKU-12', 1, 'Shipped 1× SKU-12 for Alex (c1)'),
             ('100', 'c1', 'pending', 'SKU-12', 1, NULL),
             ('101', 'c2', 'pending', 'SKU-99', 1, NULL)
           ON CONFLICT (id) DO NOTHING`);
@@ -607,17 +627,24 @@ export class CockroachShop implements Shop {
               't-90',
               '90',
               'closed',
-              'Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.'
+              'Alex (c1) reported late delivery on Field Lamp order 90 after asking for weekend delivery since they''re away on weekdays; shipping credit issued and case closed.'
             )
           ON CONFLICT (id) DO NOTHING`);
         await client.query(`
           INSERT INTO case_notes (id, order_id, ticket_id, author, body) VALUES
             (
+              'n-89',
+              '90',
+              't-90',
+              'staff',
+              'Alex (c1) mentioned they''re away Monday-Friday for work and can only receive or hand off packages on weekends; that''s why the order 90 redelivery moved to Saturday. Noting for future scheduling.'
+            ),
+            (
               'n-90',
               '90',
               't-90',
               'staff',
-              'Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
+              'Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
             )
           ON CONFLICT (id) DO NOTHING`);
         await client.query(`
@@ -742,7 +769,7 @@ export class CockroachShop implements Shop {
         before.quantity != null && before.quantity !== ""
           ? Number(before.quantity)
           : null;
-      const who = customerName(String(before.customer_id ?? ""));
+      const who = customerMemoryLabel(String(before.customer_id ?? ""));
       const note =
         sku && qty != null && Number.isFinite(qty)
           ? `Shipped ${qty}× ${sku} for ${who}`

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildS3Uri,
+  cancelActiveChangefeedJobs,
   isSafeSqlIdent,
   parseChangefeedTables,
 } from "../src/changefeed.js";
@@ -19,6 +20,52 @@ describe("changefeed identifiers", () => {
   it("validates connection names", () => {
     expect(isSafeSqlIdent("memstream_s3")).toBe(true);
     expect(isSafeSqlIdent("bad-name")).toBe(false);
+  });
+});
+
+describe("cancelActiveChangefeedJobs", () => {
+  it("cancels only active jobs for the Memstream sink", async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (text: string) => {
+        queries.push(text);
+        if (text === "SHOW CHANGEFEED JOBS") {
+          return {
+            fields: [{ name: "job_id" }, { name: "status" }, { name: "sink_uri" }],
+            rows: [
+              {
+                job_id: "101",
+                status: "running",
+                sink_uri: "external://memstream_s3",
+              },
+              {
+                job_id: "102",
+                status: "running",
+                sink_uri: "external://memstream_s3",
+              },
+              {
+                job_id: "103",
+                status: "canceled",
+                sink_uri: "external://memstream_s3",
+              },
+              {
+                job_id: "104",
+                status: "running",
+                sink_uri: "external://other_sink",
+              },
+            ],
+          };
+        }
+        return { fields: [], rows: [] };
+      }),
+    };
+
+    const canceled = await cancelActiveChangefeedJobs(client, "memstream_s3");
+    expect(canceled).toEqual(["101", "102"]);
+    expect(queries).toContain("CANCEL JOB 101");
+    expect(queries).toContain("CANCEL JOB 102");
+    expect(queries).not.toContain("CANCEL JOB 103");
+    expect(queries).not.toContain("CANCEL JOB 104");
   });
 });
 

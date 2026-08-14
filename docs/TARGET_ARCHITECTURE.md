@@ -30,6 +30,10 @@ Workers read CDC (S3) and write embeddings back into the customer DB.
 
 ## Target topology
 
+![Memstream architecture](./architecture-diagram.svg)
+
+Diagram files for Devpost / README: [`architecture-diagram.svg`](./architecture-diagram.svg) · [`architecture-diagram.png`](./architecture-diagram.png)
+
 ```
 ┌────────────── Memstream control plane (SaaS or self-host) ──────────────┐
 │  Console · APIs · Auth · Orgs / workspaces · Profiles · Runs · Jobs     │

@@ -125,7 +125,7 @@ export function ConfigureModal({
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select profile" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" align="start">
                       {profiles.map((p) => (
                         <SelectItem key={p.path} value={p.path}>
                           {p.id} ({p.application})

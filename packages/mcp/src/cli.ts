@@ -77,14 +77,14 @@ Options:
 
   const transport = String(values.transport || "stdio").toLowerCase();
   if (transport === "http") {
-    await runHttp(runtime.embedder, runtime.store, {
+    await runHttp(runtime, undefined, {
       host: values.host as string,
       port: Number(values.port),
     });
     return 0;
   }
 
-  await runStdio(runtime.embedder, runtime.store);
+  await runStdio(runtime);
   return 0;
 }
 

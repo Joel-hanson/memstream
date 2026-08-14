@@ -24,6 +24,8 @@ You never put application passwords in run rows; Connect stores ciphertext in th
 
 Probe the control plane: `curl -s http://localhost:3000/api/health` (platform DB required; S3 optional when `CDC_S3_BUCKET` is set).
 
+Demo login (optional): set `MEMSTREAM_DEMO_USER` / `MEMSTREAM_DEMO_PASSWORD` — console gates at `/login`; passwords are hashed in `memstream_operators`.
+
 ---
 
 ## 1. Prerequisites
@@ -56,6 +58,10 @@ make setup-db
 MEMSTREAM_DATABASE_URL='postgresql://…/memstream?sslmode=verify-full'
 MEMSTREAM_SECRETS_KEY=$(openssl rand -hex 32)
 
+# Optional: explicit demo application DB for "Use demo workspace".
+# If omitted and MEMSTREAM_DATABASE_URL ends in /memstream, Memstream derives /application.
+# DEMO_APPLICATION_DATABASE_URL='postgresql://…/application?sslmode=verify-full'
+
 COCKROACH_CLUSTER_ID=… && make cockroach-ca
 ```
 
@@ -79,6 +85,8 @@ Deployer IAM (managed policy, not inline):
 make install-js
 make web
 # http://127.0.0.1:3000
+make shop
+# http://127.0.0.1:3001 — example Acme shop
 ```
 
 1. **Connect** — application DB URL (not the platform URL).

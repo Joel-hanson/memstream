@@ -68,6 +68,11 @@ if [[ ! -f "$STAGE/web/apps/web/server.js" ]] && [[ ! -f "$STAGE/web/server.js" 
   find "$STAGE/web" -name 'server.js' >&2 || true
   exit 1
 fi
+if [[ ! -f "$STAGE/shop/examples/shop/server.js" ]] && [[ ! -f "$STAGE/shop/server.js" ]]; then
+  echo "error: Next standalone server.js not found under shop/" >&2
+  find "$STAGE/shop" -name 'server.js' >&2 || true
+  exit 1
+fi
 if [[ ! -f "$STAGE/worker/dist/cli.js" ]]; then
   echo "error: worker dist/cli.js missing" >&2
   exit 1

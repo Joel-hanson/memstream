@@ -1,7 +1,8 @@
 # Build a linux/amd64 prebuilt Memstream artifact for EC2 (Next standalone + worker).
 # Output layout under /out:
 #   PREBUILT
-#   web/          Next.js standalone (node apps/web/server.js)
+#   web/          Next.js console standalone (node apps/web/server.js)
+#   shop/         Example Acme shop standalone (node examples/shop/server.js)
 #   worker/       engine dist + production node_modules
 #   certs/        optional CA (filled by package script)
 
@@ -14,6 +15,7 @@ RUN apt-get update \
 
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
+COPY examples/shop/package.json examples/shop/
 COPY packages/engine/package.json packages/engine/
 COPY packages/mcp/package.json packages/mcp/
 
@@ -29,15 +31,20 @@ RUN echo "MEMSTREAM_BUILD_ID=${MEMSTREAM_BUILD_ID}" \
   && npm run build -w @memstream/engine \
   && npm run build -w @memstream/mcp \
   && npm run build -w web \
+  && npm run build -w @memstream/example-shop \
   && test -f packages/engine/dist/embedded-schema.js \
   && grep -q MEMSTREAM_SCHEMA_SQL packages/engine/dist/runs.js \
   && ! grep -q 'join(root, "sql", "memstream.sql")' packages/engine/dist/runs.js
 
-RUN mkdir -p /out/web /out/worker/dist /out/certs \
+RUN mkdir -p /out/web /out/shop /out/worker/dist /out/certs \
   && cp -a apps/web/.next/standalone/. /out/web/ \
   && mkdir -p /out/web/apps/web/.next \
   && cp -a apps/web/.next/static /out/web/apps/web/.next/static \
   && if [ -d apps/web/public ]; then mkdir -p /out/web/apps/web/public && cp -a apps/web/public/. /out/web/apps/web/public/; fi \
+  && cp -a examples/shop/.next/standalone/. /out/shop/ \
+  && mkdir -p /out/shop/examples/shop/.next \
+  && cp -a examples/shop/.next/static /out/shop/examples/shop/.next/static \
+  && if [ -d examples/shop/public ]; then mkdir -p /out/shop/examples/shop/public && cp -a examples/shop/public/. /out/shop/examples/shop/public/; fi \
   && cp -a packages/engine/dist/. /out/worker/dist/ \
   && node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("packages/engine/package.json","utf8")); writeFileSync("/out/worker/package.json", JSON.stringify({ name: "memstream-worker", private: true, type: "module", dependencies: p.dependencies }, null, 2));' \
   && cd /out/worker && npm install --omit=dev --no-fund --no-audit \

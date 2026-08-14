@@ -1,17 +1,21 @@
 {
   "name": "memstream",
   "private": true,
+  "description": "Turn CockroachDB writes into searchable agent memory, in the same database.",
   "workspaces": [
     "apps/*",
     "packages/*",
+    "examples/*",
     "infra/cdk"
   ],
   "scripts": {
     "dev": "npm run build -w @memstream/engine && npm run dev -w web",
+    "dev:shop": "npm run build -w @memstream/engine && npm run dev -w @memstream/example-shop",
     "build": "npm run build --workspaces --if-present",
     "build:engine": "npm run build -w @memstream/engine",
     "build:mcp": "npm run build -w @memstream/mcp",
     "build:web": "npm run build -w web",
+    "build:shop": "npm run build -w @memstream/example-shop",
     "synth:infra": "npm run synth -w @memstream/infra",
     "test:engine": "npm run test -w @memstream/engine",
     "worker": "npm run build -w @memstream/engine && node packages/engine/dist/cli.js",

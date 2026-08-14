@@ -68,7 +68,7 @@ export function productForSku(sku: string | null | undefined): CatalogProduct {
   };
 }
 
-export const DEMO_ASK_PROMPT = `Why is Alex upset about SKU-12?
+export const DEMO_ASK_PROMPT = `Why is Alex (customer c1) upset about SKU-12?
 1) Call Memstream search_memory first and cite the chunks (include prior order 90 / late delivery if present).
 2) Then use Cockroach Cloud MCP SQL to confirm the live order 100 status, SKU-12 stock, and any ticket for that order.
 Answer in 3 short bullets: what happened, what memory shows, what SQL confirms.`;
@@ -83,7 +83,7 @@ export const ROLE_CHANGE_ASK = `Did anyone get a privilege change in org-acme?
 2) Then use Cockroach Cloud MCP SQL to confirm user u1 (admin@acme.test) current role.
 Answer in 2 short bullets: what memory shows, what SQL confirms.`;
 
-export const RESUME_ASK = `Where did we leave off on Alex's Field Lamp case?
+export const RESUME_ASK = `Where did we leave off on Alex's (customer c1) Field Lamp case?
 1) Call Memstream search_memory and cite prior handoffs / tickets (order 90 and order 100).
 2) Confirm live SQL on orders, tickets, and case_notes.
 Answer in 3 short bullets: last handoff, what memory shows, what SQL confirms.`;
@@ -93,6 +93,8 @@ export const SUPPORT_SUGGESTIONS = [
   "Where is my Field Lamp order?",
   "My lamp arrived damaged — what's going on?",
   "Did you get my damage report?",
+  "Why hasn't my damaged lamp been picked up?",
+  "Actually, I'm free this week — can you come sooner?",
 ] as const;
 
 /**
@@ -100,7 +102,8 @@ export const SUPPORT_SUGGESTIONS = [
  * Same backend as Support; different persona and prompts.
  */
 export const STAFF_AGENT_SUGGESTIONS = [
-  "Why is Alex upset about the Field Lamp?",
-  "Where did we leave off on Alex's Field Lamp case?",
+  "Why is Alex (c1) upset about the Field Lamp?",
+  "Where did we leave off on Alex's (c1) Field Lamp case?",
+  "Why hasn't Alex's (c1) damaged lamp been picked up?",
   "Have we seen stock drops like SKU-12 before?",
 ] as const;

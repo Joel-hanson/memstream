@@ -56,7 +56,7 @@ const PERSONA = {
     launcher: "Support",
     title: "Acme Support",
     description:
-      "Help with your orders — we look up recent activity, then check live status.",
+      "Help with your orders — we look up your ticket and live status.",
     welcome:
       "Hi Alex — ask about your order and we’ll check what’s going on.",
     placeholder: "Ask about your order…",
@@ -175,7 +175,7 @@ export function ShopAskChat({
         type="button"
         onClick={() => onOpenChange(true)}
         className={cn(
-          "fixed right-4 bottom-4 z-40 flex items-center gap-2 border border-foreground/20 bg-primary px-4 py-3 text-sm text-primary-foreground transition-transform duration-300 hover:-translate-y-0.5",
+          "fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-full border border-primary/20 bg-primary px-4 py-3 text-sm text-primary-foreground shadow-md transition-transform duration-300 hover:-translate-y-0.5",
           highlight && "animate-in fade-in zoom-in-95 duration-500",
         )}
         aria-label={`Open ${copy.launcher}`}
@@ -183,7 +183,7 @@ export function ShopAskChat({
         <LauncherIcon className="size-4" />
         <span className="font-medium">{copy.launcher}</span>
         {highlight ? (
-          <span className="size-2 animate-pulse bg-primary-foreground" />
+          <span className="size-2 animate-pulse rounded-full bg-primary-foreground" />
         ) : null}
       </button>
 
@@ -207,9 +207,9 @@ export function ShopAskChat({
                   key={m.id}
                   className={cn(
                     "animate-in fade-in slide-in-from-bottom-2 duration-300",
-                    m.role === "user" && "ml-6 border bg-muted/40 px-3 py-2",
+                    m.role === "user" && "ml-6 rounded-lg border border-border bg-muted/40 px-3 py-2",
                     m.role === "assistant" &&
-                      "mr-2 border border-foreground/20 bg-background px-3 py-2",
+                      "mr-2 rounded-lg border border-border bg-card px-3 py-2",
                     m.role === "system" && "text-xs text-muted-foreground",
                   )}
                 >
@@ -233,7 +233,7 @@ export function ShopAskChat({
                         {m.citations.map((c, i) => (
                           <li
                             key={`${c.table_name}-${i}`}
-                            className="border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
+                            className="rounded-md border border-border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
                           >
                             <span className="font-medium text-foreground">
                               {c.table_name}
@@ -271,7 +271,7 @@ export function ShopAskChat({
                     type="button"
                     disabled={pending}
                     onClick={() => void ask(s)}
-                    className="border bg-muted/30 px-2 py-1 text-left text-[0.65rem] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
+                    className="rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-[0.65rem] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
                   >
                     {s}
                   </button>

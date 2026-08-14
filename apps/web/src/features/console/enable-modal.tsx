@@ -15,6 +15,13 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import type { JobStatus } from "@/lib/types";
 import { Advanced } from "./advanced";
@@ -239,24 +246,33 @@ export function EnableModal({
               </Field>
               {deploy ? (
                 <Field>
-                  <FieldLabel htmlFor="workerCompute">
+                  <FieldLabel>
                     <TermHint hint="Managed Lambda (recommended): S3-triggered function. EC2: self-host / demo box with memstream-watch.">
                       Worker compute
                     </TermHint>
                   </FieldLabel>
-                  <select
-                    id="workerCompute"
-                    className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                  <Select
                     value={workerCompute}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       onWorkerComputeChange(
-                        e.target.value === WORKER_COMPUTE.EC2 ? WORKER_COMPUTE.EC2 : WORKER_COMPUTE.LAMBDA,
+                        value === WORKER_COMPUTE.EC2
+                          ? WORKER_COMPUTE.EC2
+                          : WORKER_COMPUTE.LAMBDA,
                       )
                     }
                   >
-                    <option value={WORKER_COMPUTE.LAMBDA}>Managed Lambda (recommended)</option>
-                    <option value={WORKER_COMPUTE.EC2}>EC2 (self-host / demo)</option>
-                  </select>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select worker compute…" />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      <SelectItem value={WORKER_COMPUTE.LAMBDA}>
+                        Managed Lambda (recommended)
+                      </SelectItem>
+                      <SelectItem value={WORKER_COMPUTE.EC2}>
+                        EC2 (self-host / demo)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </Field>
               ) : null}
             </Advanced>

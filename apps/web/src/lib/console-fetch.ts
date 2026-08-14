@@ -10,7 +10,7 @@ function bearerToken(): string {
   );
 }
 
-/** fetch() with Authorization Bearer and X-Memstream-Org when set. */
+/** fetch() with Authorization Bearer, credentials (session cookie), and org header. */
 export function consoleFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -24,5 +24,9 @@ export function consoleFetch(
   if (orgId && !headers.has("X-Memstream-Org")) {
     headers.set("X-Memstream-Org", orgId);
   }
-  return fetch(input, { ...init, headers });
+  return fetch(input, {
+    ...init,
+    headers,
+    credentials: init?.credentials ?? "same-origin",
+  });
 }

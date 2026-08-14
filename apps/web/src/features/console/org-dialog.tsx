@@ -26,9 +26,9 @@ export function OrgDialog({
   inviteCode,
   busy,
   isBusy,
+  onboarding = false,
   onCreate,
   onInvite,
-  onJoin,
   onSelect,
   onClear,
 }: {
@@ -39,49 +39,69 @@ export function OrgDialog({
   inviteCode: string | null;
   busy: BusyAction;
   isBusy: boolean;
+  /** First-run: must create/select before continuing. */
+  onboarding?: boolean;
   onCreate: (name: string) => void;
   onInvite: () => void;
-  onJoin: (code: string) => void;
+  /** Kept for API compatibility; join-with-invite UI is temporarily hidden. */
+  onJoin?: (code: string) => void;
   onSelect: (id: string) => void;
   onClear: () => void;
 }) {
   const [name, setName] = useState("");
-  const [code, setCode] = useState("");
   const [copied, setCopied] = useState(false);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (onboarding && !next) return;
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        className="sm:max-w-md"
+        showCloseButton={!onboarding}
+        onPointerDownOutside={onboarding ? (e) => e.preventDefault() : undefined}
+        onEscapeKeyDown={onboarding ? (e) => e.preventDefault() : undefined}
+      >
         <DialogHeader>
-          <DialogTitle>Organization</DialogTitle>
+          <DialogTitle>
+            {onboarding ? "Create your organization" : "Organization"}
+          </DialogTitle>
           <DialogDescription>
-            Thin SaaS entry — create an org, share an invite code, or join one.
-            Workspaces (Connect) are tagged with the active org.
+            {onboarding
+              ? "Name your team to get started. Workspaces and Connect are scoped to this org — then you can enable live memory."
+              : "Create an org or share an invite code. Workspaces (Connect) are tagged with the active org."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="border bg-muted/20 px-3 py-2 text-xs">
-            <p className="text-muted-foreground">Active org</p>
-            <p className="font-medium text-foreground">
-              {org ? `${org.name} · ${org.id}` : "None (local / unscoped)"}
-            </p>
-            {org ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                className="mt-1 px-0"
-                onClick={onClear}
-              >
-                Clear org context
-              </Button>
-            ) : null}
-          </div>
+          {!onboarding ? (
+            <div className="border bg-muted/20 px-3 py-2 text-xs">
+              <p className="text-muted-foreground">Active org</p>
+              <p className="font-medium text-foreground">
+                {org ? `${org.name} · ${org.id}` : "None (local / unscoped)"}
+              </p>
+              {org ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="mt-1 px-0"
+                  onClick={onClear}
+                >
+                  Clear org context
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
 
           {orgs.length > 0 ? (
             <Field>
-              <FieldLabel>Known orgs</FieldLabel>
+              <FieldLabel>
+                {onboarding ? "Choose an existing org" : "Known orgs"}
+              </FieldLabel>
               <ul className="divide-y border text-xs">
                 {orgs.map((o) => (
                   <li
@@ -101,7 +121,7 @@ export function OrgDialog({
                       disabled={org?.id === o.id}
                       onClick={() => onSelect(o.id)}
                     >
-                      {org?.id === o.id ? "Active" : "Use"}
+                      {org?.id === o.id ? "Active" : onboarding ? "Continue" : "Use"}
                     </Button>
                   </li>
                 ))}
@@ -110,13 +130,24 @@ export function OrgDialog({
           ) : null}
 
           <Field>
-            <FieldLabel htmlFor="orgName">Create org</FieldLabel>
+            <FieldLabel htmlFor="orgName">
+              {onboarding && orgs.length === 0
+                ? "Organization name"
+                : "Create org"}
+            </FieldLabel>
             <div className="flex gap-2">
               <Input
                 id="orgName"
                 placeholder="Acme"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                autoFocus={onboarding}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && name.trim() && !isBusy) {
+                    e.preventDefault();
+                    onCreate(name.trim());
+                  }
+                }}
               />
               <Button
                 type="button"
@@ -124,12 +155,12 @@ export function OrgDialog({
                 onClick={() => onCreate(name.trim())}
               >
                 {busy === "org" ? <Spinner /> : null}
-                Create
+                {onboarding ? "Create & continue" : "Create"}
               </Button>
             </div>
           </Field>
 
-          {org ? (
+          {org && !onboarding ? (
             <Field>
               <FieldLabel>Invite</FieldLabel>
               <div className="flex flex-wrap gap-2">
@@ -163,33 +194,19 @@ export function OrgDialog({
               </div>
             </Field>
           ) : null}
-
-          <Field>
-            <FieldLabel htmlFor="inviteCode">Join with invite</FieldLabel>
-            <div className="flex gap-2">
-              <Input
-                id="inviteCode"
-                placeholder="inv_…"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isBusy || !code.trim()}
-                onClick={() => onJoin(code.trim())}
-              >
-                Join
-              </Button>
-            </div>
-          </Field>
         </div>
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-        </DialogFooter>
+        {!onboarding ? (
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

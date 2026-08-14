@@ -8,7 +8,7 @@ export async function GET(
   req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const denied = guardConsoleApi(req);
+  const denied = guardConsoleApi(req, { poll: true });
   if (denied) return denied;
 
   const { id } = await context.params;

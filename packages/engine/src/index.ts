@@ -105,12 +105,15 @@ export {
 } from "./search.js";
 export {
   interestingColumns,
+  narrativeColumns,
+  watchableColumns,
   proposeProfileDict,
   proposeProfileYaml,
   fetchPublicTables,
 } from "./discover.js";
 export {
   buildS3Uri,
+  cancelActiveChangefeedJobs,
   cancelChangefeed,
   createChangefeed,
   isSafeSqlIdent,
@@ -141,6 +144,16 @@ export {
   type S3CdcSnapshot,
   type TeardownResult,
 } from "./console-actions.js";
+export {
+  buildCloudDatabaseUrl,
+  getCloudConnectionString,
+  injectSqlPassword,
+  listCloudClusters,
+  listCloudDatabases,
+  listCloudSqlUsers,
+  type CloudCluster,
+  type CloudSqlUser,
+} from "./cockroach-cloud.js";
 export {
   computeLagSeconds,
   derivePipelineHealth,
@@ -178,11 +191,18 @@ export {
   type MemstreamRunStep,
 } from "./runs.js";
 export {
+  DEMO_CONNECTION_NAME,
+  activateConnection,
+  deriveApplicationUrlFromPlatformUrl,
+  ensureDemoConnection,
   getActiveConnection,
   getConnection,
+  getConnectionByName,
   listConnections,
   resolveAppDatabaseUrl,
+  resolveDemoApplicationDatabaseUrl,
   upsertConnection,
+  type EnsureDemoConnectionInput,
   type MemstreamConnection,
   type MemstreamWorkspace,
   type UpsertConnectionInput,
@@ -198,6 +218,15 @@ export {
   type MemstreamOrg,
   type MemstreamOrgInvite,
 } from "./orgs.js";
+export {
+  authLoginRequired,
+  countOperators,
+  ensureDemoOperator,
+  hashPassword,
+  verifyOperatorPassword,
+  verifyPassword,
+  type MemstreamOperator,
+} from "./operators.js";
 export {
   decryptSecret,
   encryptSecret,

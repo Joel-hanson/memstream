@@ -175,8 +175,21 @@ export function RunSummaryCard({
     <Card size="sm">
       <CardHeader className="flex-row items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
-          <CardTitle className="truncate">
-            {activeRun ? runProfileLabel(activeRun) : profileLabel}
+          <CardTitle className="flex items-center gap-2">
+            {watching ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-emerald-600"
+                    aria-label="Watching this flow"
+                  />
+                </TooltipTrigger>
+                <TooltipContent>Watching</TooltipContent>
+              </Tooltip>
+            ) : null}
+            <span className="truncate">
+              {activeRun ? runProfileLabel(activeRun) : profileLabel}
+            </span>
           </CardTitle>
           <CardDescription className="truncate">
             {activeRun?.tables || tables || "No tables yet"}
@@ -636,10 +649,10 @@ export function LivePanel({
             </Button>
             <p className="text-xs text-muted-foreground">
               Ask in Cursor with{" "}
-              <TermHint hint="Cursor calls this app's /api/mcp endpoint, which runs search_memory against your chunks.">
+              <TermHint hint="Cursor /api/mcp: search_memory, schema resources, make_memory_profile → save_memory_profile.">
                 <span className="font-mono">search_memory</span>
               </TermHint>
-              . Copy Memstream MCP pastes that HTTP URL.
+              . Copy Memstream MCP pastes the HTTP URL (plus Basic demo/demo or Bearer when auth is on).
             </p>
           </div>
         </CardContent>

@@ -22,11 +22,14 @@ export function changedColumns(event: ChangeEvent): Set<string> {
   if (event.before === null && event.after === null) {
     return new Set();
   }
-  if (event.before === null) {
-    return new Set(event.after ? Object.keys(event.after) : []);
-  }
   if (event.after === null) {
-    return new Set(Object.keys(event.before));
+    return new Set(Object.keys(event.before ?? {}));
+  }
+  // Insert / changefeed initial scan: no previous row, so this is not a
+  // column change. Rules that watch columns_changed stay quiet; rules with
+  // an empty when still match (see matchRules).
+  if (event.before === null || Object.keys(event.before).length === 0) {
+    return new Set();
   }
   const cols = new Set<string>();
   const keys = new Set([

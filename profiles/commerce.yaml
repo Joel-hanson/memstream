@@ -10,6 +10,15 @@ changefeed:
   sink: s3
 
 rules:
+  - name: order_placed
+    table: orders
+    when:
+      on: insert
+    chunk_template: |
+      Order {{id}} placed ({{sku}} × {{quantity}}) for customer {{customer_id}}
+      status {{after.status}} at {{timestamp}}.
+    tags: [order, placed]
+
   - name: order_status_change
     table: orders
     when:
@@ -31,8 +40,7 @@ rules:
 
   - name: ticket_opened
     table: tickets
-    when:
-      columns_changed: [status, body]
+    when: {}
     chunk_template: |
       Support ticket {{id}} for order {{order_id}} is {{after.status}}:
       {{after.body}} ({{timestamp}})
@@ -40,8 +48,7 @@ rules:
 
   - name: support_handoff
     table: case_notes
-    when:
-      columns_changed: [body, author]
+    when: {}
     chunk_template: |
       Case note {{id}} ({{after.author}}) for order {{order_id}} ticket {{ticket_id}}:
       {{after.body}} ({{timestamp}})

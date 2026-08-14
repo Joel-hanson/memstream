@@ -14,6 +14,24 @@ const INTERESTING = new Set([
   "total",
 ]);
 
+/** Free-text / narrative fields that often belong in memory chunks. */
+const NARRATIVE = new Set([
+  "body",
+  "note",
+  "notes",
+  "comment",
+  "message",
+  "description",
+  "author",
+  "title",
+  "summary",
+  "content",
+  "text",
+  "reason",
+  "detail",
+  "details",
+]);
+
 export function interestingColumns(columns: string[]): string[] {
   return columns.filter((col) => {
     const lower = col.toLowerCase();
@@ -23,6 +41,34 @@ export function interestingColumns(columns: string[]): string[] {
       lower.endsWith("_state")
     );
   });
+}
+
+export function narrativeColumns(columns: string[]): string[] {
+  return columns.filter((col) => {
+    const lower = col.toLowerCase();
+    return (
+      NARRATIVE.has(lower) ||
+      lower.endsWith("_note") ||
+      lower.endsWith("_body") ||
+      lower.endsWith("_message") ||
+      lower.endsWith("_comment")
+    );
+  });
+}
+
+/** Columns worth watching: state metrics + narrative text. */
+export function watchableColumns(columns: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const col of [
+    ...interestingColumns(columns),
+    ...narrativeColumns(columns),
+  ]) {
+    if (seen.has(col)) continue;
+    seen.add(col);
+    out.push(col);
+  }
+  return out;
 }
 
 export function proposeProfileDict(options: {
@@ -36,11 +82,11 @@ export function proposeProfileDict(options: {
   const watched: string[] = [];
   for (const table of Object.keys(options.tables).sort()) {
     const columns = options.tables[table] ?? [];
-    const interesting = interestingColumns(columns);
-    if (!interesting.length) continue;
+    const watchCols = watchableColumns(columns);
+    if (!watchCols.length) continue;
     watched.push(table);
     const idField = columns.includes("id") ? "id" : columns[0] || "id";
-    for (const col of interesting) {
+    for (const col of watchCols) {
       rules.push({
         name: `${table}_${col}_change`,
         table,

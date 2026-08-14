@@ -19,7 +19,7 @@ export class MemstreamEc2Stack extends cdk.Stack {
     super(scope, id, props);
 
     this.templateOptions.description =
-      "Memstream demo box — EC2 (shop + S3 watcher), IAM instance role " +
+      "Memstream demo box — EC2 (Caddy HTTPS + shop subdomain via sslip.io + S3 watcher), IAM instance role " +
       "(S3 CDC + deploy package + Bedrock embeddings), security group. " +
       "Cockroach Cloud and changefeed stay outside this stack.";
 
@@ -128,7 +128,7 @@ export class MemstreamEc2Stack extends cdk.Stack {
       type: "String",
       default: "0.0.0.0/0",
       description:
-        "CIDR allowed to reach the console/shop on port 3000. Default is open for demos; tighten to YOUR_IP/32 for real use.",
+        "CIDR allowed to reach Caddy (:80 ACME + :443 HTTPS). Console and shop are hostname-routed (sslip.io). Default is open for demos; tighten to YOUR_IP/32 for real use.",
       allowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$",
     });
 
@@ -317,14 +317,21 @@ export class MemstreamEc2Stack extends cdk.Stack {
 
     const securityGroup = new ec2.CfnSecurityGroup(this, "SecurityGroup", {
       groupDescription:
-        "Memstream console/shop (3000); SSM for shell (no SSH ingress)",
+        "Caddy HTTPS (:443) + ACME HTTP-01 (:80); SSM for shell (no SSH ingress)",
       securityGroupIngress: [
         {
           ipProtocol: "tcp",
-          fromPort: 3000,
-          toPort: 3000,
+          fromPort: 80,
+          toPort: 80,
           cidrIp: shopCidr.valueAsString,
-          description: "Memstream Next.js console + shop",
+          description: "ACME HTTP-01 and HTTP to HTTPS redirect",
+        },
+        {
+          ipProtocol: "tcp",
+          fromPort: 443,
+          toPort: 443,
+          cidrIp: shopCidr.valueAsString,
+          description: "Caddy HTTPS (console and shop via sslip.io)",
         },
       ],
       tags: [
@@ -382,10 +389,15 @@ export class MemstreamEc2Stack extends cdk.Stack {
         "Public DNS name (resolves to PublicIp; preferred over raw IP)",
       value: demoInstance.attrPublicDnsName,
     });
+    new cdk.CfnOutput(this, "ConsoleUrl", {
+      description:
+        "Memstream console (HTTPS via Caddy + free sslip.io hostname)",
+      value: cdk.Fn.sub("https://${DemoInstance.PublicIp}.sslip.io/"),
+    });
     new cdk.CfnOutput(this, "ShopUrl", {
       description:
-        "Demo shop + console URL (Next.js; /shop, /connect, /enable, …)",
-      value: cdk.Fn.sub("http://${DemoInstance.PublicDnsName}:3000/shop"),
+        "Example Acme shop (HTTPS subdomain shop.<ip>.sslip.io)",
+      value: cdk.Fn.sub("https://shop.${DemoInstance.PublicIp}.sslip.io/"),
     });
     new cdk.CfnOutput(this, "SsmConnectHint", {
       description: "Connect without SSH",

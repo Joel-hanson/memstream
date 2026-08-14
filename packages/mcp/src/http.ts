@@ -4,7 +4,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Embedder, MemoryStore } from "@memstream/engine";
-import { createMcpServer } from "./server.js";
+import { createMcpServer, type McpServerContext } from "./server.js";
+
+function toContext(
+  embedderOrCtx: Embedder | McpServerContext,
+  store?: MemoryStore,
+): McpServerContext {
+  if (store) {
+    return {
+      embedder: embedderOrCtx as Embedder,
+      store,
+    };
+  }
+  return embedderOrCtx as McpServerContext;
+}
 
 function parseList(raw: string | undefined): string[] {
   return (raw || "")
@@ -16,7 +29,6 @@ function parseList(raw: string | undefined): string[] {
 function hostAllowed(hostHeader: string | null): boolean {
   const allowed = parseList(process.env.MEMSTREAM_MCP_ALLOWED_HOSTS);
   if (!allowed.length) {
-    // Default: localhost-ish only when unset
     const h = (hostHeader || "").toLowerCase().split(":")[0] || "";
     return (
       !h ||
@@ -91,8 +103,8 @@ function rejectHost(request: Request): Response | null {
  */
 export async function handleMcpFetchRequest(
   request: Request,
-  embedder: Embedder,
-  store: MemoryStore,
+  embedderOrCtx: Embedder | McpServerContext,
+  store?: MemoryStore,
 ): Promise<Response> {
   const blocked = rejectHost(request);
   if (blocked) return blocked;
@@ -116,7 +128,7 @@ export async function handleMcpFetchRequest(
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
-  const server = createMcpServer(embedder, store);
+  const server = createMcpServer(toContext(embedderOrCtx, store));
   await server.connect(transport);
   try {
     const response = await transport.handleRequest(request);
@@ -131,26 +143,27 @@ export async function handleMcpFetchRequest(
  * Standalone HTTP listener for `make mcp` / MEMSTREAM_MCP_TRANSPORT=http.
  */
 export async function runHttp(
-  embedder: Embedder,
-  store: MemoryStore,
+  embedderOrCtx: Embedder | McpServerContext,
+  store?: MemoryStore,
   options: { host?: string; port?: number } = {},
 ): Promise<void> {
+  const ctx = toContext(embedderOrCtx, store);
   const host = options.host || process.env.MEMSTREAM_MCP_HOST || "127.0.0.1";
   const port = Number(
     options.port || process.env.MEMSTREAM_MCP_PORT || 8765,
   );
 
   const httpServer = createServer(async (req, res) => {
-    const headerBag: Record<string, string> = {};
+    const headerMap: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
-      if (typeof v === "string") headerBag[k] = v;
-      else if (Array.isArray(v) && v[0]) headerBag[k] = v[0];
+      if (typeof v === "string") headerMap[k] = v;
+      else if (Array.isArray(v) && v[0]) headerMap[k] = v[0];
     }
     const fakeReq = new Request(
       `http://${req.headers.host || "localhost"}${req.url || "/"}`,
       {
         method: req.method,
-        headers: headerBag,
+        headers: headerMap,
       },
     );
     const cors = corsHeaders(fakeReq);
@@ -164,7 +177,10 @@ export async function runHttp(
       return;
     }
 
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const url = new URL(
+      req.url || "/",
+      `http://${req.headers.host || "localhost"}`,
+    );
     if (url.pathname !== "/mcp" && url.pathname !== "/") {
       res.writeHead(404).end("Not found");
       return;
@@ -182,14 +198,27 @@ export async function runHttp(
           name: "memstream",
           transport: "streamable-http",
           mcp: "/mcp",
-          tool: "search_memory",
+          tools: [
+            "get_connection",
+            "list_watchable_tables",
+            "list_memory_profiles",
+            "propose_memory_profile",
+            "save_memory_profile",
+            "search_memory",
+          ],
+          prompts: ["make_memory_profile"],
+          resources: [
+            "memstream://profile-guide",
+            "memstream://schema",
+            "memstream://profiles/{id}",
+          ],
         }),
       );
       return;
     }
 
     try {
-      await handleNodeMcpRequest(req, res, embedder, store);
+      await handleNodeMcpRequest(req, res, ctx);
     } catch (err) {
       console.error(err);
       if (!res.headersSent) {
@@ -212,20 +241,21 @@ export async function runHttp(
 
   const base = `http://${host}:${port}`;
   console.error(`Memstream MCP (HTTP) listening on ${base}/mcp`);
-  console.error(`Cursor config: { "mcpServers": { "memstream": { "url": "${base}/mcp" } } }`);
+  console.error(
+    `Cursor config: { "mcpServers": { "memstream": { "url": "${base}/mcp" } } }`,
+  );
 }
 
 async function handleNodeMcpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  embedder: Embedder,
-  store: MemoryStore,
+  ctx: McpServerContext,
 ): Promise<void> {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
-  const server = createMcpServer(embedder, store);
+  const server = createMcpServer(ctx);
   await server.connect(transport);
 
   const close = () => {

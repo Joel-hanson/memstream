@@ -102,3 +102,11 @@ CREATE TABLE IF NOT EXISTS memstream_org_invites (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   INDEX memstream_org_invites_org_idx (org_id)
 );
+
+-- Console operators (demo login). Password stored as scrypt$saltHex$hashHex.
+CREATE TABLE IF NOT EXISTS memstream_operators (
+  username STRING PRIMARY KEY,
+  password_hash STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

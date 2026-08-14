@@ -25,6 +25,7 @@ export type McpRuntime = {
   store: MemoryStore;
   databaseUrl: string;
   connectionId: string;
+  root: string;
 };
 
 export async function resolveMcpRuntime(
@@ -66,5 +67,5 @@ export async function resolveMcpRuntime(
     connectionId: connectionId || undefined,
   });
 
-  return { embedder, store, databaseUrl, connectionId };
+  return { embedder, store, databaseUrl, connectionId, root };
 }

@@ -129,7 +129,7 @@ export async function POST(req: Request) {
       loadSqlFacts(),
     ]);
 
-    const result = composeShopAskReply(query, hits, facts);
+    const result = composeShopAskReply(query, hits, facts, persona);
 
     let caseNoteId: string | undefined;
     if (result.handoff && defaults.database_url) {

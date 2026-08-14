@@ -1,0 +1,129 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Acme Supply — warm paper / terracotta storefront (distinct from Memstream taupe) */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.972 0.014 82);
+  --foreground: oklch(0.24 0.032 48);
+  --card: oklch(0.992 0.008 85);
+  --card-foreground: oklch(0.24 0.032 48);
+  --popover: oklch(0.992 0.008 85);
+  --popover-foreground: oklch(0.24 0.032 48);
+  --primary: oklch(0.48 0.11 42);
+  --primary-foreground: oklch(0.99 0.01 85);
+  --secondary: oklch(0.935 0.022 78);
+  --secondary-foreground: oklch(0.28 0.04 48);
+  --muted: oklch(0.94 0.02 80);
+  --muted-foreground: oklch(0.5 0.03 52);
+  --accent: oklch(0.93 0.035 75);
+  --accent-foreground: oklch(0.28 0.04 48);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.99 0.01 85);
+  --border: oklch(0.88 0.025 72);
+  --input: oklch(0.88 0.025 72);
+  --ring: oklch(0.58 0.1 42);
+  --chart-1: oklch(0.72 0.12 42);
+  --chart-2: oklch(0.62 0.08 145);
+  --chart-3: oklch(0.7 0.08 85);
+  --chart-4: oklch(0.58 0.06 240);
+  --chart-5: oklch(0.5 0.1 30);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --font-sans: var(--font-shop-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+  --font-heading: var(--font-shop-display), ui-serif, Georgia, serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    min-height: 100vh;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-heading {
+    font-family: var(--font-shop-display), ui-serif, Georgia, serif;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+.dark {
+  --background: oklch(0.2 0.02 48);
+  --foreground: oklch(0.96 0.012 85);
+  --card: oklch(0.25 0.022 48);
+  --card-foreground: oklch(0.96 0.012 85);
+  --popover: oklch(0.25 0.022 48);
+  --popover-foreground: oklch(0.96 0.012 85);
+  --primary: oklch(0.72 0.1 45);
+  --primary-foreground: oklch(0.22 0.03 48);
+  --secondary: oklch(0.3 0.025 48);
+  --secondary-foreground: oklch(0.96 0.012 85);
+  --muted: oklch(0.3 0.025 48);
+  --muted-foreground: oklch(0.72 0.03 70);
+  --accent: oklch(0.32 0.03 55);
+  --accent-foreground: oklch(0.96 0.012 85);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.96 0.012 85);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.65 0.09 45);
+  --chart-1: oklch(0.72 0.12 42);
+  --chart-2: oklch(0.62 0.08 145);
+  --chart-3: oklch(0.7 0.08 85);
+  --chart-4: oklch(0.58 0.06 240);
+  --chart-5: oklch(0.5 0.1 30);
+}

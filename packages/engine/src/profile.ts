@@ -12,6 +12,8 @@ export class ProfileError extends Error {
 
 export interface WhenClause {
   columnsChanged: string[];
+  /** insert | update | delete; empty means any row event. */
+  on: string;
 }
 
 export interface Rule {
@@ -129,6 +131,7 @@ function parseRule(item: unknown): Rule {
       columnsChanged: Array.isArray(whenRaw.columns_changed)
         ? whenRaw.columns_changed.map(String)
         : [],
+      on: String(whenRaw.on ?? "").trim().toLowerCase(),
     },
     chunkTemplate: String(rule.chunk_template ?? "").trim(),
     tags: Array.isArray(rule.tags) ? rule.tags.map(String) : [],

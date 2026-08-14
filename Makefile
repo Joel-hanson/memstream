@@ -1,4 +1,4 @@
-.PHONY: help install-js test-engine demo-local demo-reset demo-reset-shop watch-cloud changefeed-dry changefeed mcp mcp-stdio web setup-db deploy-aws destroy-aws logs cockroach-ca synth-infra cdk-diff
+.PHONY: help install-js test-engine demo-local demo-reset demo-reset-shop watch-cloud changefeed-dry changefeed mcp mcp-stdio web shop setup-db deploy-aws destroy-aws logs cockroach-ca synth-infra cdk-diff
 
 .DEFAULT_GOAL := help
 
@@ -9,7 +9,8 @@ help:
 	@echo "    make install-js     Install npm workspaces (Node 20+)"
 	@echo "    make test-engine    Run engine unit tests"
 	@echo "    make demo-local     Index examples/demo-events.jsonl → data/memstream-chunks-ts.json"
-	@echo "    make web            Next console + shop at http://127.0.0.1:3000"
+	@echo "    make web            Memstream console at http://127.0.0.1:3000"
+	@echo "    make shop           Example Acme shop at http://127.0.0.1:3001"
 	@echo "    make cockroach-ca   Download Cockroach Cloud CA → ~/.postgresql/root.crt"
 	@echo ""
 	@echo "  Cloud / AWS:"
@@ -17,7 +18,7 @@ help:
 	@echo "    make setup-db       Create memstream + application DBs + SQL"
 	@echo "    make web            Connect → Configure → Enable (changefeed)"
 	@echo "    make watch-cloud    Mode A: S3→Bedrock worker on your laptop"
-	@echo "    make deploy-aws     Mode B: EC2 shop + watcher (see docs/AWS.md)"
+	@echo "    make deploy-aws     Mode B: EC2 console :80 + shop :8080 (see docs/AWS.md)"
 	@echo "    make destroy-aws    Tear down the EC2 stack"
 	@echo "    make logs           Tail Lambda + EC2 logs in one terminal"
 	@echo "    make synth-infra    CDK → infra/ec2.yaml + infra/lambda.yaml"
@@ -41,7 +42,7 @@ test-engine:
 demo-local:
 	bash scripts/run-local-ts.sh
 
-# Full reset to demo beginning (does not destroy AWS / changefeeds).
+# Full reset to demo beginning (cancels Memstream changefeeds; does not destroy AWS).
 demo-reset:
 	set -a && . ./.env && set +a && \
 	npm run demo-reset --
@@ -82,7 +83,14 @@ web:
 	set -a && . ./.env && set +a && \
 	npm run build -w @memstream/engine && \
 	npm run build -w @memstream/mcp && \
+	NEXT_PUBLIC_SHOP_URL=$${NEXT_PUBLIC_SHOP_URL:-http://127.0.0.1:3001} \
 	npm run dev -w web
+
+shop:
+	set -a && . ./.env && set +a && \
+	npm run build -w @memstream/engine && \
+	NEXT_PUBLIC_MEMSTREAM_URL=$${NEXT_PUBLIC_MEMSTREAM_URL:-http://127.0.0.1:3000} \
+	npm run dev -w @memstream/example-shop
 
 deploy-aws:
 	bash scripts/deploy-aws.sh

@@ -26,8 +26,40 @@ if [[ ! -f /opt/memstream/web/apps/web/server.js ]] && [[ ! -f /opt/memstream/we
   exit 1
 fi
 
+# AL2023 / modern accounts often require IMDSv2 (token). Plain GET returns empty.
+IMDS_TOKEN="$(curl -fsS --max-time 2 -X PUT \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+  http://169.254.169.254/latest/api/token 2>/dev/null || true)"
+imds_get() {
+  local path="$1"
+  if [[ -n "$IMDS_TOKEN" ]]; then
+    curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${!IMDS_TOKEN}" \
+      "http://169.254.169.254/latest/meta-data/${!path}" 2>/dev/null || true
+  else
+    curl -fsS --max-time 2 "http://169.254.169.254/latest/meta-data/${!path}" 2>/dev/null || true
+  fi
+}
+
+# Public IPv4 drives free sslip.io hostnames (no paid domain):
+#   https://<ip>.sslip.io/          → console
+#   https://shop.<ip>.sslip.io/     → shop
+PUBLIC_IP="$(imds_get public-ipv4)"
+if [[ -z "$PUBLIC_IP" ]]; then
+  echo "ERROR: could not resolve public IPv4 from IMDS (needed for sslip.io HTTPS)" >&2
+  exit 1
+fi
+CONSOLE_HOST="${!PUBLIC_IP}.sslip.io"
+SHOP_HOST="shop.${!PUBLIC_IP}.sslip.io"
+CONSOLE_PUBLIC_URL="https://${!CONSOLE_HOST}"
+SHOP_PUBLIC_URL="https://${!SHOP_HOST}"
+
+# Secrets Manager / CLI calls need an explicit region (ARN alone is not enough on AL2023 awscli).
+export AWS_DEFAULT_REGION="${AWS::Region}"
+export AWS_REGION="${AWS::Region}"
+
 cat > /opt/memstream/.env <<'ENVEOF'
 AWS_REGION=${AWS::Region}
+AWS_DEFAULT_REGION=${AWS::Region}
 CDC_S3_BUCKET=${CdcS3Bucket}
 CDC_S3_PREFIX=${CdcS3Prefix}
 BEDROCK_EMBED_MODEL=${BedrockEmbedModel}
@@ -42,17 +74,30 @@ MEMSTREAM_ROOT=/opt/memstream
 MEMSTREAM_WORKER_COMPUTE=${MemstreamWorkerCompute}
 SHOP_BACKEND=cockroach
 NODE_ENV=production
-PORT=3000
-HOSTNAME=0.0.0.0
 PGSSLROOTCERT=/opt/memstream/certs/root.crt
 MEMSTREAM_SSLROOTCERT=/opt/memstream/certs/root.crt
 CONFIG_SECRET_ARN=${ConfigSecretArn}
+MEMSTREAM_DEMO_USER=demo
+MEMSTREAM_DEMO_PASSWORD=demo
+MEMSTREAM_AUTH_REQUIRED=1
 ENVEOF
+
+# Public cross-links (console ↔ shop) — HTTPS via Caddy + sslip.io.
+# Use Fn::Sub bang-escape for shell vars (exclamation after the brace).
+{
+  echo "PUBLIC_IP=${!PUBLIC_IP}"
+  echo "CONSOLE_HOST=${!CONSOLE_HOST}"
+  echo "SHOP_HOST=${!SHOP_HOST}"
+  echo "NEXT_PUBLIC_SHOP_URL=${!SHOP_PUBLIC_URL}"
+  echo "NEXT_PUBLIC_MEMSTREAM_URL=${!CONSOLE_PUBLIC_URL}"
+} >> /opt/memstream/.env
+
 # Secrets from Secrets Manager (preferred) or legacy CFN params (empty in new deploys)
 python3 <<'PY'
-import json, subprocess
+import json, os, subprocess
 env_path = "/opt/memstream/.env"
 arn = "${ConfigSecretArn}".strip()
+region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "${AWS::Region}"
 values = {
   "DATABASE_URL": """${DatabaseUrl}""",
   "MEMSTREAM_DATABASE_URL": """${MemstreamDatabaseUrl}""",
@@ -62,11 +107,14 @@ if arn:
   try:
     out = subprocess.check_output(
       ["aws", "secretsmanager", "get-secret-value",
-       "--secret-id", arn, "--query", "SecretString", "--output", "text"],
+       "--secret-id", arn, "--region", region,
+       "--query", "SecretString", "--output", "text"],
       text=True,
     )
     parsed = json.loads(out)
-    for k in ("DATABASE_URL", "MEMSTREAM_DATABASE_URL", "MEMSTREAM_SECRETS_KEY"):
+    for k in ("DATABASE_URL", "MEMSTREAM_DATABASE_URL", "MEMSTREAM_SECRETS_KEY",
+              "DEMO_APPLICATION_DATABASE_URL", "MEMSTREAM_DEMO_USER",
+              "MEMSTREAM_DEMO_PASSWORD"):
       if parsed.get(k):
         values[k] = str(parsed[k])
   except Exception as e:
@@ -79,18 +127,23 @@ with open(env_path, "a", encoding="utf-8") as f:
     f.write(f'{k}="{esc}"\n')
 PY
 chmod 600 /opt/memstream/.env
+if ! grep -q '^MEMSTREAM_DATABASE_URL=' /opt/memstream/.env; then
+  echo "ERROR: MEMSTREAM_DATABASE_URL missing after ConfigSecretArn load — console will be unhealthy" >&2
+  exit 1
+fi
 if [[ ! -f /opt/memstream/certs/root.crt ]]; then
   echo "WARN: certs/root.crt missing from package — Cockroach TLS may fail" >&2
 fi
 
-cat > /usr/local/bin/memstream-shop-run <<'EOF'
+# Next apps listen on localhost only; Caddy terminates TLS on :443 and proxies by hostname.
+cat > /usr/local/bin/memstream-console-run <<'EOF'
 #!/bin/bash
 set -euo pipefail
 set -a
 # shellcheck disable=SC1091
 source /opt/memstream/.env
 set +a
-export HOSTNAME=0.0.0.0
+export HOSTNAME=127.0.0.1
 export PORT=3000
 cd /opt/memstream/web
 if [[ -f apps/web/server.js ]]; then
@@ -100,6 +153,27 @@ if [[ -f server.js ]]; then
   exec node server.js
 fi
 echo "ERROR: Next standalone server.js not found under /opt/memstream/web" >&2
+exit 1
+EOF
+chmod +x /usr/local/bin/memstream-console-run
+
+cat > /usr/local/bin/memstream-shop-run <<'EOF'
+#!/bin/bash
+set -euo pipefail
+set -a
+# shellcheck disable=SC1091
+source /opt/memstream/.env
+set +a
+export HOSTNAME=127.0.0.1
+export PORT=3001
+cd /opt/memstream/shop
+if [[ -f examples/shop/server.js ]]; then
+  exec node examples/shop/server.js
+fi
+if [[ -f server.js ]]; then
+  exec node server.js
+fi
+echo "ERROR: Next standalone server.js not found under /opt/memstream/shop" >&2
 exit 1
 EOF
 chmod +x /usr/local/bin/memstream-shop-run
@@ -134,9 +208,61 @@ exec node dist/cli.js \
 EOF
 chmod +x /usr/local/bin/memstream-watch-run
 
+# Install Caddy (free Let's Encrypt TLS) — arch matches t3 (amd64) / t4g (arm64).
+CADDY_VER=2.9.1
+case "$(uname -m)" in
+  aarch64|arm64) CADDY_ARCH=arm64 ;;
+  x86_64) CADDY_ARCH=amd64 ;;
+  *)
+    echo "ERROR: unsupported arch for Caddy: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${!CADDY_VER}/caddy_${!CADDY_VER}_linux_${!CADDY_ARCH}.tar.gz" \
+  -o /tmp/caddy.tgz
+tar -xzf /tmp/caddy.tgz -C /usr/local/bin caddy
+chmod +x /usr/local/bin/caddy
+id caddy >/dev/null 2>&1 || useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy
+install -d -o caddy -g caddy -m 0755 /var/lib/caddy /etc/caddy
+
+# Bang-escape shell vars for Fn::Sub; unquoted heredoc expands them at boot.
+cat > /etc/caddy/Caddyfile <<EOF
+{
+	email memstream-demo@sslip.io
+}
+
+${!CONSOLE_HOST} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}
+
+${!SHOP_HOST} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3001
+}
+EOF
+
+cat > /etc/systemd/system/memstream-console.service <<'EOF'
+[Unit]
+Description=Memstream Next.js console (127.0.0.1:3000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/memstream
+ExecStart=/usr/local/bin/memstream-console-run
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/opt/memstream/.env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > /etc/systemd/system/memstream-shop.service <<'EOF'
 [Unit]
-Description=Memstream Next.js console + shop (prebuilt)
+Description=Memstream example Acme shop (127.0.0.1:3001)
 After=network-online.target
 Wants=network-online.target
 
@@ -170,19 +296,65 @@ EnvironmentFile=/opt/memstream/.env
 WantedBy=multi-user.target
 EOF
 
+cat > /etc/systemd/system/caddy.service <<'EOF'
+[Unit]
+Description=Caddy HTTPS reverse proxy (sslip.io)
+After=network-online.target memstream-console.service memstream-shop.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+Environment=HOME=/var/lib/caddy
+WorkingDirectory=/var/lib/caddy
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
+systemctl enable --now memstream-console.service
 systemctl enable --now memstream-shop.service
 systemctl enable --now memstream-watch.service
 
 for i in $(seq 1 36); do
-  if curl -fsS -o /dev/null http://127.0.0.1:3000/shop; then
-    echo "memstream shop healthy on :3000"
+  if curl -fsS -o /dev/null http://127.0.0.1:3000/login && curl -fsS -o /dev/null http://127.0.0.1:3001/; then
+    echo "memstream backends healthy on :3000 and :3001"
     break
   fi
   if [[ "$i" -eq 36 ]]; then
-    echo "ERROR: shop did not become healthy; journalctl -u memstream-shop -n 80" >&2
-    systemctl status memstream-shop --no-pager -l || true
-    journalctl -u memstream-shop -n 80 --no-pager || true
+    echo "ERROR: console/shop backends did not become healthy" >&2
+    systemctl status memstream-console memstream-shop --no-pager -l || true
+    journalctl -u memstream-console -u memstream-shop -n 80 --no-pager || true
+    exit 1
+  fi
+  sleep 2
+done
+
+systemctl enable --now caddy.service
+
+# First Let's Encrypt issuance can take a bit; require HTTPS on both hostnames.
+for i in $(seq 1 60); do
+  if curl -fsS -o /dev/null "${!CONSOLE_PUBLIC_URL}/login" \
+    && curl -fsS -o /dev/null "${!SHOP_PUBLIC_URL}/"; then
+    echo "memstream HTTPS healthy: ${!CONSOLE_PUBLIC_URL} and ${!SHOP_PUBLIC_URL}"
+    break
+  fi
+  if [[ "$i" -eq 60 ]]; then
+    echo "ERROR: Caddy HTTPS did not become healthy" >&2
+    systemctl status caddy --no-pager -l || true
+    journalctl -u caddy -n 80 --no-pager || true
     exit 1
   fi
   sleep 2

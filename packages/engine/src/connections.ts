@@ -1,5 +1,7 @@
 /** Application DB connections stored in Memstream platform DB (encrypted). */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { withClientObjects } from "./db.js";
 import {
   appDatabaseLabel,
@@ -10,6 +12,66 @@ import {
 import { decryptSecret, encryptSecret } from "./secrets.js";
 import { sanitizeDatabaseUrlForStorage } from "./store-cockroach.js";
 
+/** Fixed workspace name for the judge / skip-Connect path. */
+export const DEMO_CONNECTION_NAME = "demo";
+
+function parseEnvFile(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  const out: Record<string, string> = {};
+  for (const raw of readFileSync(path, "utf-8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) continue;
+    const eq = line.indexOf("=");
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function envOrFile(key: string, root: string): string {
+  const fromEnv = process.env[key]?.trim();
+  if (fromEnv) return fromEnv;
+  return parseEnvFile(join(root, ".env"))[key]?.trim() || "";
+}
+
+/**
+ * Rewrite platform `…/memstream` → `…/application` (matches `make setup-db`).
+ * Returns "" when the path is not exactly the `memstream` database.
+ */
+export function deriveApplicationUrlFromPlatformUrl(platformUrl: string): string {
+  const trimmed = platformUrl.trim();
+  if (!trimmed) return "";
+  try {
+    const u = new URL(trimmed.replace(/^postgresql:/i, "http:"));
+    const db = (u.pathname.replace(/^\//, "").split("/")[0] || "").toLowerCase();
+    if (db !== "memstream") return "";
+    u.pathname = "/application";
+    return u.toString().replace(/^http:/i, "postgresql:");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Demo application DB for skip-Connect: DEMO_APPLICATION_DATABASE_URL, else
+ * derive from MEMSTREAM_DATABASE_URL (`/memstream` → `/application`).
+ */
+export function resolveDemoApplicationDatabaseUrl(
+  root = findRepoRoot(),
+): string {
+  const explicit = envOrFile("DEMO_APPLICATION_DATABASE_URL", root);
+  if (explicit) return explicit;
+  const platform = memstreamDatabaseUrl(root);
+  if (!platform) return "";
+  return deriveApplicationUrlFromPlatformUrl(platform);
+}
 export type MemstreamConnection = {
   id: string;
   /** Product alias: workspace id === connection id. */
@@ -158,15 +220,115 @@ export async function getConnection(
   });
 }
 
+/** Find a connection by workspace name (optionally scoped to org). */
+export async function getConnectionByName(
+  name: string,
+  root = findRepoRoot(),
+  orgId?: string | null,
+): Promise<MemstreamConnection | null> {
+  const url = memstreamDatabaseUrl(root);
+  if (!url) return null;
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  await ensureMemstreamSchema(root);
+  const scoped = orgId?.trim() || null;
+  return withClientObjects(url, async (client) => {
+    const result = scoped
+      ? await client.query(
+          `
+      SELECT ${SELECT_COLS}
+      FROM memstream_connections
+      WHERE name = $1 AND org_id = $2
+      ORDER BY updated_at DESC
+      LIMIT 1
+      `,
+          [trimmed, scoped],
+        )
+      : await client.query(
+          `
+      SELECT ${SELECT_COLS}
+      FROM memstream_connections
+      WHERE name = $1 AND org_id IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+      `,
+          [trimmed],
+        );
+    if (!result.rows.length) return null;
+    return rowToConnection(result.rows[0]!, root);
+  });
+}
+
+export type EnsureDemoConnectionInput = {
+  root?: string;
+  orgId?: string | null;
+  bucket?: string;
+  region?: string;
+  prefix?: string;
+};
+
+/**
+ * Upsert the shared demo workspace (name=demo) and mark it active.
+ * Does not run Configure/Enable — operator or judge continues from there.
+ */
+export async function ensureDemoConnection(
+  input: EnsureDemoConnectionInput = {},
+): Promise<MemstreamConnection> {
+  const root = input.root ?? findRepoRoot();
+  const databaseUrl = resolveDemoApplicationDatabaseUrl(root);
+  if (!databaseUrl) {
+    throw new Error(
+      "Demo application database not configured (set DEMO_APPLICATION_DATABASE_URL or use a MEMSTREAM_DATABASE_URL ending in /memstream)",
+    );
+  }
+  const orgId = input.orgId?.trim() || null;
+  const existing = await getConnectionByName(
+    DEMO_CONNECTION_NAME,
+    root,
+    orgId,
+  );
+  const bucket =
+    input.bucket?.trim() || envOrFile("CDC_S3_BUCKET", root) || undefined;
+  const region =
+    input.region?.trim() || envOrFile("AWS_REGION", root) || undefined;
+  const prefix =
+    input.prefix?.trim() || envOrFile("CDC_S3_PREFIX", root) || undefined;
+  return upsertConnection({
+    databaseUrl,
+    name: DEMO_CONNECTION_NAME,
+    id: existing?.id,
+    orgId,
+    bucket,
+    region,
+    prefix,
+    root,
+  });
+}
+
 export async function listConnections(
   root = findRepoRoot(),
+  orgId?: string | null,
 ): Promise<Omit<MemstreamConnection, "database_url">[]> {
   const url = memstreamDatabaseUrl(root);
   if (!url) return [];
   await ensureMemstreamSchema(root);
+  const scoped = orgId?.trim() || null;
   return withClientObjects(url, async (client) => {
-    const result = await client.query(
-      `
+    const result = scoped
+      ? await client.query(
+          `
+      SELECT
+        id::text, name, database_label, bucket, region, prefix, is_active,
+        org_id, created_at::text, updated_at::text
+      FROM memstream_connections
+      WHERE org_id = $1
+      ORDER BY updated_at DESC
+      LIMIT 50
+      `,
+          [scoped],
+        )
+      : await client.query(
+          `
       SELECT
         id::text, name, database_label, bucket, region, prefix, is_active,
         org_id, created_at::text, updated_at::text
@@ -174,7 +336,7 @@ export async function listConnections(
       ORDER BY updated_at DESC
       LIMIT 50
       `,
-    );
+        );
     return result.rows.map((row) => ({
       id: String(row.id),
       workspace_id: String(row.id),
@@ -189,6 +351,73 @@ export async function listConnections(
       created_at: row.created_at != null ? String(row.created_at) : null,
       updated_at: row.updated_at != null ? String(row.updated_at) : null,
     }));
+  });
+}
+
+/**
+ * Mark an existing connection active (reuse saved workspace without re-pasting
+ * Cloud API key / DATABASE_URL). Deactivates other rows in the same org scope.
+ */
+export async function activateConnection(
+  id: string,
+  root = findRepoRoot(),
+  orgId?: string | null,
+): Promise<MemstreamConnection> {
+  const url = memstreamDatabaseUrl(root);
+  if (!url) {
+    throw new Error("MEMSTREAM_DATABASE_URL required to store connections");
+  }
+  const connectionId = id.trim();
+  if (!connectionId) throw new Error("connection id required");
+  await ensureMemstreamSchema(root);
+  const scoped = orgId?.trim() || null;
+
+  return withClientObjects(url, async (client) => {
+    const existing = await client.query(
+      `
+      SELECT ${SELECT_COLS}
+      FROM memstream_connections
+      WHERE id = $1::uuid
+      `,
+      [connectionId],
+    );
+    if (!existing.rows.length) {
+      throw new Error("Connection not found");
+    }
+    const row = existing.rows[0]!;
+    const rowOrg =
+      row.org_id != null && String(row.org_id).trim()
+        ? String(row.org_id)
+        : null;
+    if (scoped && rowOrg && rowOrg !== scoped) {
+      throw new Error("Connection not found in this org");
+    }
+
+    if (rowOrg) {
+      await client.query(
+        `UPDATE memstream_connections SET is_active = false
+         WHERE is_active = true AND org_id = $1 AND id <> $2::uuid`,
+        [rowOrg, connectionId],
+      );
+    } else {
+      await client.query(
+        `UPDATE memstream_connections SET is_active = false
+         WHERE is_active = true AND org_id IS NULL AND id <> $1::uuid`,
+        [connectionId],
+      );
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE memstream_connections SET
+        is_active = true,
+        updated_at = now()
+      WHERE id = $1::uuid
+      RETURNING ${SELECT_COLS}
+      `,
+      [connectionId],
+    );
+    return rowToConnection(updated.rows[0]!, root);
   });
 }
 

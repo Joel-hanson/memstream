@@ -27,6 +27,9 @@ export function SetupWizard({
   resumeRun,
   runsCount,
   mcpCopied,
+  demoAvailable,
+  demoBusy,
+  onUseDemo,
   onOpenConnect,
   onOpenConfigure,
   onOpenEnable,
@@ -41,6 +44,9 @@ export function SetupWizard({
   resumeRun: MemstreamRun | undefined;
   runsCount: number;
   mcpCopied: boolean;
+  demoAvailable: boolean;
+  demoBusy: boolean;
+  onUseDemo: () => void;
   onOpenConnect: () => void;
   onOpenConfigure: () => void;
   onOpenEnable: () => void;
@@ -51,12 +57,16 @@ export function SetupWizard({
 }) {
   const primarySetup =
     setupStep === 1
-      ? { label: "Connect cluster", icon: RiPlugLine }
+      ? demoAvailable
+        ? { label: "Use demo workspace", icon: RiFlashlightLine }
+        : { label: "Connect your own cluster", icon: RiPlugLine }
       : setupStep === 2
         ? { label: "Configure", icon: RiSettings3Line }
         : { label: "Enable", icon: RiFlashlightLine };
 
   const PrimaryIcon = primarySetup.icon as ComponentType<{ className?: string }>;
+  const onPrimaryClick =
+    setupStep === 1 && demoAvailable ? onUseDemo : onPrimary;
 
   return (
     <div className="flex max-w-lg flex-col gap-6 pt-6 sm:pt-10">
@@ -66,7 +76,9 @@ export function SetupWizard({
         </h1>
         <p className="text-sm text-muted-foreground">
           {setupStep === 1
-            ? "Connect your Cockroach cluster."
+            ? demoAvailable
+              ? "Try our shared demo application database, or connect your own Cockroach cluster."
+              : "Connect your Cockroach cluster."
             : setupStep === 2
               ? "Pick which tables Memstream should watch."
               : "Enable Memstream on those tables."}
@@ -153,10 +165,31 @@ export function SetupWizard({
         </ol>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" onClick={onPrimary}>
-            <PrimaryIcon />
-            {primarySetup.label}
+          <Button
+            type="button"
+            disabled={demoBusy}
+            onClick={onPrimaryClick}
+          >
+            {demoBusy && setupStep === 1 && demoAvailable ? (
+              <Spinner />
+            ) : (
+              <PrimaryIcon />
+            )}
+            {demoBusy && setupStep === 1 && demoAvailable
+              ? "Activating…"
+              : primarySetup.label}
           </Button>
+          {setupStep === 1 && demoAvailable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={demoBusy}
+              onClick={onOpenConnect}
+            >
+              <RiPlugLine />
+              Connect your own cluster
+            </Button>
+          ) : null}
           {setupStep > 1 ? (
             <Button type="button" variant="ghost" onClick={onOpenConnect}>
               Edit connection
@@ -198,7 +231,8 @@ export function SetupWizard({
 }
 
 export function ConsoleHeaderBar({
-  watching,
+  isDemo,
+  authUser,
   showProof,
   jobFailed,
   canEnable,
@@ -207,12 +241,14 @@ export function ConsoleHeaderBar({
   runsCount,
   org,
   onOpenOrg,
+  onLogout,
   onRetryEnable,
   onOpenRuns,
   onOpenConfigure,
   onNewMemstream,
 }: {
-  watching: boolean;
+  isDemo: boolean;
+  authUser: string | null;
   showProof: boolean;
   jobFailed: boolean;
   canEnable: boolean;
@@ -221,6 +257,7 @@ export function ConsoleHeaderBar({
   runsCount: number;
   org: { id: string; name: string } | null;
   onOpenOrg: () => void;
+  onLogout?: () => void;
   onRetryEnable: () => void;
   onOpenRuns: () => void;
   onOpenConfigure: () => void;
@@ -229,7 +266,7 @@ export function ConsoleHeaderBar({
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
       <div className="mx-auto flex h-12 w-full max-w-5xl items-center gap-3 px-4">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
           <div className="flex size-7 items-center justify-center bg-primary text-primary-foreground">
             <MemstreamMark className="size-4" />
           </div>
@@ -241,21 +278,11 @@ export function ConsoleHeaderBar({
           </div>
         </Link>
 
-        <div className="ml-auto flex items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={onOpenOrg}>
-            <RiBuilding2Line />
-            <span className="max-w-28 truncate hidden sm:inline">
-              {org?.name || "Org"}
-            </span>
-          </Button>
-          {watching ? (
-            <Badge variant="secondary" className="gap-1.5">
-              <span className="size-1.5 animate-pulse-dot rounded-full bg-foreground" />
-              Watching
-            </Badge>
-          ) : null}
+        {isDemo ? <Badge variant="outline">Demo</Badge> : null}
+
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
           {showProof ? (
-            <>
+            <div className="flex items-center gap-1">
               {jobFailed ? (
                 <Button
                   type="button"
@@ -288,7 +315,7 @@ export function ConsoleHeaderBar({
               {runsCount > 0 ? (
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
                   onClick={onNewMemstream}
                 >
@@ -296,8 +323,40 @@ export function ConsoleHeaderBar({
                   New
                 </Button>
               ) : null}
-            </>
+            </div>
           ) : null}
+
+          <div
+            className="mx-1 hidden h-4 w-px bg-border sm:block"
+            aria-hidden
+          />
+
+          <div className="flex items-center gap-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={onOpenOrg}
+            >
+              <RiBuilding2Line />
+              <span className="max-w-28 truncate hidden sm:inline">
+                {org?.name || "Org"}
+              </span>
+            </Button>
+            {authUser ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={onLogout}
+                title={`Signed in as ${authUser}`}
+              >
+                Sign out
+              </Button>
+            ) : null}
+          </div>
         </div>
       </div>
     </header>

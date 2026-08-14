@@ -67,6 +67,8 @@ export function ConsoleApp() {
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [orgs, setOrgs] = useState<OrgInfo[]>([]);
   const [orgOpen, setOrgOpen] = useState(false);
+  const [orgOnboarding, setOrgOnboarding] = useState(false);
+  const [orgsLoaded, setOrgsLoaded] = useState(false);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [ruleEnabled, setRuleEnabled] = useState<Record<string, boolean>>({});
@@ -87,6 +89,10 @@ export function ConsoleApp() {
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [hasStoredUrl, setHasStoredUrl] = useState(false);
   const [urlHint, setUrlHint] = useState("");
+  const [demoAvailable, setDemoAvailable] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
+  const [authUser, setAuthUser] = useState<string | null>(null);
+  const [loginRequired, setLoginRequired] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MemstreamRun | null>(null);
   const [runsSheetOpen, setRunsSheetOpen] = useState(false);
   const [runsFilter, setRunsFilter] = useState<"all" | "live" | "failed">(
@@ -101,6 +107,8 @@ export function ConsoleApp() {
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const watchRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pipelineInFlight = useRef(false);
+  const lastPipelineAt = useRef(0);
   const isBusy = busy !== null;
 
   const updateConnect = (patch: Partial<ConnectConfig>) =>
@@ -166,7 +174,10 @@ export function ConsoleApp() {
   const loadOrgs = useCallback(async () => {
     const stored = readStoredOrgId();
     const result = await consoleApi.org.get();
-    if (!result.ok) return;
+    if (!result.ok) {
+      setOrgsLoaded(true);
+      return;
+    }
     const list = result.value.orgs || [];
     setOrgs(list);
     const current =
@@ -175,19 +186,56 @@ export function ConsoleApp() {
     if (current) {
       setOrg(current);
       storeOrgId(current.id);
-    } else if (stored && !list.some((o) => o.id === stored)) {
-      storeOrgId(null);
+      setOrgOnboarding(false);
+    } else {
+      if (stored && !list.some((o) => o.id === stored)) {
+        storeOrgId(null);
+      }
       setOrg(null);
     }
+    setOrgsLoaded(true);
   }, []);
 
   useEffect(() => {
     void loadOrgs();
   }, [loadOrgs]);
 
+  // After login + orgs load: first-time users must create/select an org.
+  useEffect(() => {
+    if (!orgsLoaded || booting) return;
+    if (loginRequired && !authUser) return;
+    if (org) {
+      setOrgOnboarding(false);
+      return;
+    }
+    setOrgOnboarding(true);
+    setOrgOpen(true);
+  }, [orgsLoaded, booting, loginRequired, authUser, org]);
+
   useEffect(() => {
     void (async () => {
       try {
+        {
+          const authRes = await fetch("/api/auth/login", {
+            credentials: "same-origin",
+          });
+          if (authRes.ok) {
+            const auth = (await authRes.json()) as {
+              authenticated?: boolean;
+              username?: string | null;
+              login_required?: boolean;
+            };
+            setLoginRequired(Boolean(auth.login_required));
+            if (auth.authenticated && auth.username) {
+              setAuthUser(String(auth.username));
+            }
+            if (auth.login_required && !auth.authenticated) {
+              window.location.href = "/login";
+              return;
+            }
+          }
+        }
+
         await loadProfiles().then(() => {
           void syncTables(profilePath);
         });
@@ -200,6 +248,8 @@ export function ConsoleApp() {
               setHasStoredUrl(true);
               setUrlHint(d.database_url_hint || d.connection_id || "saved");
             }
+            setDemoAvailable(Boolean(d.demo_available));
+            setIsDemo(Boolean(d.is_demo));
             if (d.worker_compute === WORKER_COMPUTE.LAMBDA || d.worker_compute === WORKER_COMPUTE.EC2) {
               setWorkerCompute(d.worker_compute);
             }
@@ -287,6 +337,8 @@ export function ConsoleApp() {
 
   const refreshPipeline = useCallback(async (opts?: { track?: boolean }) => {
     if (!credentialsSet) return;
+    if (pipelineInFlight.current && !opts?.track) return;
+    pipelineInFlight.current = true;
     if (opts?.track) setBusy("refresh");
     try {
       const result = await consoleApi.pipeline({
@@ -301,8 +353,12 @@ export function ConsoleApp() {
         tables,
         stack_name: stackName,
       });
-      if (result.ok) setPipeline(result.value);
+      if (result.ok) {
+        lastPipelineAt.current = Date.now();
+        setPipeline(result.value);
+      }
     } finally {
+      pipelineInFlight.current = false;
       if (opts?.track) {
         setBusy((current) => (current === "refresh" ? null : current));
       }
@@ -369,6 +425,14 @@ export function ConsoleApp() {
       const tick = async () => {
         const result = await consoleApi.jobs.get(id);
         if (!result.ok) {
+          // Rate limits / transient errors are not a missing job.
+          if (
+            result.error.status === 429 ||
+            result.error.status === 503 ||
+            result.error.code === "NETWORK"
+          ) {
+            return;
+          }
           staleTicks += 1;
           // Hard miss: no in-memory job and no persisted run.
           if (staleTicks >= 8) {
@@ -400,7 +464,9 @@ export function ConsoleApp() {
         }
 
         staleTicks = 0;
-        void refreshPipeline();
+        if (Date.now() - lastPipelineAt.current >= 4000) {
+          void refreshPipeline();
+        }
 
         if (isTerminalRunStatus(data.status)) {
           if (pollRef.current) clearInterval(pollRef.current);
@@ -409,6 +475,11 @@ export function ConsoleApp() {
           {
             const runsResult = await consoleApi.runs.list();
             if (runsResult.ok) setRuns(runsResult.value.runs || []);
+          }
+          // Land on Live — don't leave the success dialog blocking the console.
+          if (data.status === RUN_STATUS.SUCCEEDED) {
+            setModal(null);
+            setNotice("Memstream is live");
           }
         }
       };
@@ -501,6 +572,11 @@ export function ConsoleApp() {
       setProfileReady(false);
       setDraft(null);
       setError(null);
+      if (opts?.clearUrl) {
+        setHasStoredUrl(false);
+        setIsDemo(false);
+        setUrlHint("");
+      }
       setConnect((c) => ({
         ...defaultConnect,
         database_url: opts?.clearUrl ? "" : c.database_url,
@@ -592,16 +668,20 @@ export function ConsoleApp() {
     [],
   );
 
-  const onPropose = async () => {
+  const onPropose = async (
+    includeTables?: string[],
+    connectionIdOverride?: string,
+  ) => {
     setBusy("propose");
     setError(null);
     try {
       const result = await consoleApi.propose({
-        connection_id: connectionId || undefined,
+        connection_id: connectionIdOverride || connectionId || undefined,
         database_url: isUsableDatabaseUrl(connect.database_url)
           ? connect.database_url
           : undefined,
         application,
+        tables: includeTables?.length ? includeTables : undefined,
       });
       if (!result.ok) {
         setError(result.error.message || "Propose failed");
@@ -620,6 +700,66 @@ export function ConsoleApp() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const onCloudConnected = async (
+    connection: {
+      id?: string;
+      name?: string;
+      database_url_hint?: string;
+    },
+    tablesPicked: string[],
+  ) => {
+    const id = connection?.id ? String(connection.id) : "";
+    if (id) setConnectionId(id);
+    setHasStoredUrl(true);
+    setIsDemo(connection?.name === "demo");
+    if (connection?.database_url_hint) {
+      setUrlHint(String(connection.database_url_hint));
+    }
+    setConnect((c) => ({ ...c, database_url: "" }));
+    setConfigMode("discover");
+    setModal("configure");
+    setNotice(
+      tablesPicked.length
+        ? `Connected via Cockroach Cloud (${tablesPicked.length} table${tablesPicked.length === 1 ? "" : "s"} selected)`
+        : "Connected via Cockroach Cloud",
+    );
+    await onPropose(
+      tablesPicked.length ? tablesPicked : undefined,
+      id || undefined,
+    );
+  };
+
+  const onReuseWorkspace = (connection: {
+    id?: string;
+    name?: string;
+    database_url_hint?: string;
+    bucket?: string | null;
+    region?: string | null;
+    prefix?: string | null;
+  }) => {
+    const id = connection?.id ? String(connection.id) : "";
+    if (id) setConnectionId(id);
+    setHasStoredUrl(true);
+    setIsDemo(connection?.name === "demo");
+    if (connection?.database_url_hint) {
+      setUrlHint(String(connection.database_url_hint));
+    }
+    setConnect((c) => ({
+      ...c,
+      database_url: "",
+      bucket: connection.bucket?.trim() || c.bucket,
+      region: connection.region?.trim() || c.region,
+      prefix: connection.prefix?.trim() || c.prefix,
+    }));
+    setNotice(
+      connection?.name === "demo"
+        ? "Using demo workspace"
+        : `Using saved workspace${connection?.name ? ` (${connection.name})` : ""}`,
+    );
+    if (!profileReady) setModal("configure");
+    else setModal(null);
   };
 
   const onLoadTemplate = async () => {
@@ -746,7 +886,9 @@ export function ConsoleApp() {
       if (result.value.org) {
         setOrg(result.value.org);
         storeOrgId(result.value.org.id);
-        setNotice(`Org ${result.value.org.name} ready`);
+        setOrgOnboarding(false);
+        setOrgOpen(false);
+        setNotice(`Org ${result.value.org.name} ready — connect or use the demo workspace`);
       }
       await loadOrgs();
     } finally {
@@ -785,6 +927,8 @@ export function ConsoleApp() {
       if (result.value.org) {
         setOrg(result.value.org);
         storeOrgId(result.value.org.id);
+        setOrgOnboarding(false);
+        setOrgOpen(false);
         setNotice(`Joined ${result.value.org.name}`);
       }
       setInviteCode(null);
@@ -799,7 +943,13 @@ export function ConsoleApp() {
     setOrg(next);
     storeOrgId(next?.id || null);
     setInviteCode(null);
-    setNotice(next ? `Using org ${next.name}` : null);
+    if (next) {
+      setOrgOnboarding(false);
+      setOrgOpen(false);
+      setNotice(`Using org ${next.name}`);
+    } else {
+      setNotice(null);
+    }
   };
 
   const onClearOrg = () => {
@@ -807,6 +957,8 @@ export function ConsoleApp() {
     storeOrgId(null);
     setInviteCode(null);
     setNotice("Cleared org context");
+    setOrgOnboarding(true);
+    setOrgOpen(true);
   };
 
   const onSaveConnect = async () => {
@@ -831,11 +983,36 @@ export function ConsoleApp() {
       const connection = result.value.connection;
       if (connection?.id) setConnectionId(String(connection.id));
       setHasStoredUrl(true);
+      setIsDemo(connection?.name === "demo");
       if (connection?.database_url_hint) {
         setUrlHint(String(connection.database_url_hint));
       }
       setConnect((c) => ({ ...c, database_url: "" }));
       setModal("configure");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onUseDemo = async () => {
+    setBusy("connect");
+    setError(null);
+    try {
+      const result = await consoleApi.connection.useDemo();
+      if (!result.ok) {
+        setError(result.error.message || "Could not activate demo workspace");
+        return;
+      }
+      const connection = result.value.connection;
+      if (connection?.id) setConnectionId(String(connection.id));
+      setHasStoredUrl(true);
+      setIsDemo(true);
+      if (connection?.database_url_hint) {
+        setUrlHint(String(connection.database_url_hint));
+      }
+      setConnect((c) => ({ ...c, database_url: "" }));
+      setNotice("Using demo application database");
+      if (!profileReady) setModal("configure");
     } finally {
       setBusy(null);
     }
@@ -1093,7 +1270,8 @@ export function ConsoleApp() {
   return (
     <div className="flex min-h-screen flex-col">
       <ConsoleHeaderBar
-        watching={watching}
+        isDemo={isDemo}
+        authUser={authUser}
         showProof={showProof}
         jobFailed={job?.status === RUN_STATUS.FAILED}
         canEnable={canEnable}
@@ -1102,6 +1280,17 @@ export function ConsoleApp() {
         runsCount={runs.length}
         org={org}
         onOpenOrg={() => setOrgOpen(true)}
+        onLogout={() => {
+          void (async () => {
+            await fetch("/api/auth/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({ action: "logout" }),
+            });
+            window.location.href = loginRequired ? "/login" : "/";
+          })();
+        }}
         onRetryEnable={() => void onEnable()}
         onOpenRuns={() => openRunsSheet("all")}
         onOpenConfigure={() => setModal("configure")}
@@ -1164,6 +1353,9 @@ export function ConsoleApp() {
             resumeRun={resumeRun}
             runsCount={runs.length}
             mcpCopied={mcpCopied}
+            demoAvailable={demoAvailable}
+            demoBusy={busy === "connect"}
+            onUseDemo={() => void onUseDemo()}
             onOpenConnect={() => setModal("connect")}
             onOpenConfigure={() => setModal("configure")}
             onOpenEnable={() => setModal("enable")}
@@ -1228,7 +1420,13 @@ export function ConsoleApp() {
         credentialsSet={credentialsSet}
         busy={busy}
         isBusy={isBusy}
+        connectionId={connectionId}
+        orgId={org?.id || readStoredOrgId()}
         onSave={() => void onSaveConnect()}
+        onCloudConnected={(connection, tablesPicked) =>
+          void onCloudConnected(connection, tablesPicked)
+        }
+        onReuseWorkspace={onReuseWorkspace}
       />
 
       <ConfigureModal
@@ -1347,6 +1545,7 @@ export function ConsoleApp() {
         inviteCode={inviteCode}
         busy={busy}
         isBusy={isBusy}
+        onboarding={orgOnboarding}
         onCreate={(name) => void onCreateOrg(name)}
         onInvite={() => void onInviteOrg()}
         onJoin={(code) => void onJoinOrg(code)}

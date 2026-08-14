@@ -18,6 +18,8 @@ fi
 : "${MEMSTREAM_DATABASE_URL:?Set MEMSTREAM_DATABASE_URL in .env (platform DB)}"
 : "${CDC_S3_BUCKET:?Set CDC_S3_BUCKET in .env}"
 : "${AWS_REGION:=us-east-1}"
+# Avoid aws CLI opening `less` on describe-stacks tables (blocks the script UX).
+export AWS_PAGER=""
 
 if [[ -z "${MEMSTREAM_SECRETS_KEY:-}" ]]; then
   echo "WARN: MEMSTREAM_SECRETS_KEY unset — Connect/Enable on EC2 cannot encrypt connection secrets" >&2
@@ -230,6 +232,11 @@ aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs' \
   --output table
 
+CONSOLE_URL="$(aws cloudformation describe-stacks \
+  --region "$AWS_REGION" \
+  --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`ConsoleUrl`].OutputValue' \
+  --output text)"
 SHOP_URL="$(aws cloudformation describe-stacks \
   --region "$AWS_REGION" \
   --stack-name "$STACK_NAME" \
@@ -237,17 +244,21 @@ SHOP_URL="$(aws cloudformation describe-stacks \
   --output text)"
 
 echo
-echo "Shop URL: ${SHOP_URL}"
-echo "Waiting for prebuilt boot (Node install + start — usually ~1–2 min)…"
+echo "Console URL: ${CONSOLE_URL}"
+echo "Shop URL:    ${SHOP_URL}"
+echo "Waiting for prebuilt boot + Let's Encrypt (usually ~2–4 min)…"
 ready=0
-for i in $(seq 1 36); do
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 "$SHOP_URL" 2>/dev/null || true)"
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
-    echo "Shop is up (HTTP ${code}): ${SHOP_URL}"
+# Cert issuance needs extra headroom beyond Node start.
+for i in $(seq 1 48); do
+  shop_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 "$SHOP_URL" 2>/dev/null || true)"
+  console_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 "${CONSOLE_URL}login" 2>/dev/null || true)"
+  if [[ "$shop_code" =~ ^(200|301|302|307|308)$ ]] && [[ "$console_code" =~ ^(200|301|302|307|308)$ ]]; then
+    echo "Console is up (HTTP ${console_code}): ${CONSOLE_URL}"
+    echo "Shop is up (HTTP ${shop_code}): ${SHOP_URL}"
     ready=1
     break
   fi
-  printf "  attempt %s/36 — HTTP %s\n" "$i" "${code:-000}"
+  printf "  attempt %s/48 — console HTTP %s, shop HTTP %s\n" "$i" "${console_code:-000}" "${shop_code:-000}"
   sleep 5
 done
 if [[ "$ready" -ne 1 ]]; then
@@ -256,7 +267,9 @@ if [[ "$ready" -ne 1 ]]; then
     --stack-name "$STACK_NAME" \
     --query 'Stacks[0].Outputs[?OutputKey==`InstanceId`].OutputValue' \
     --output text)"
-  echo "WARN: Shop not reachable yet at ${SHOP_URL}" >&2
-  echo "Check userdata: aws ec2 get-console-output --instance-id ${INSTANCE_ID} --region ${AWS_REGION} --latest --output text | tail -80" >&2
+  echo "WARN: Console/shop not reachable yet over HTTPS" >&2
+  echo "  Console: ${CONSOLE_URL}  (last HTTP ${console_code:-000})" >&2
+  echo "  Shop:    ${SHOP_URL}  (last HTTP ${shop_code:-000})" >&2
+  echo "Check userdata: aws ec2 get-console-output --instance-id ${INSTANCE_ID} --region ${AWS_REGION} --latest --output text | tail -120" >&2
   exit 1
 fi

@@ -1,4 +1,6 @@
 import {
+  activateConnection,
+  listConnections,
   memstreamDatabaseUrl,
   upsertConnection,
 } from "@memstream/engine";
@@ -11,7 +13,7 @@ export const runtime = "nodejs";
 function publicConnection(connection: {
   id: string;
   name: string;
-  database_url: string;
+  database_url?: string;
   database_label: string | null;
   bucket: string | null;
   region: string | null;
@@ -20,14 +22,18 @@ function publicConnection(connection: {
   is_active: boolean;
   updated_at: string | null;
 }) {
+  const hasUrl = Boolean(connection.database_url);
+  const hint = connection.database_url
+    ? maskDatabaseUrl(connection.database_url)
+    : connection.database_label
+      ? `…/${connection.database_label}`
+      : "";
   return {
     id: connection.id,
     workspace_id: connection.id,
     name: connection.name,
-    has_url: Boolean(connection.database_url),
-    database_url_hint: connection.database_url
-      ? maskDatabaseUrl(connection.database_url)
-      : "",
+    has_url: hasUrl || Boolean(connection.database_label),
+    database_url_hint: hint,
     database_label: connection.database_label,
     bucket: connection.bucket,
     region: connection.region,
@@ -36,6 +42,64 @@ function publicConnection(connection: {
     is_active: connection.is_active,
     updated_at: connection.updated_at,
   };
+}
+
+function orgIdFrom(req: Request, bodyOrg?: string): string | null {
+  return (
+    bodyOrg?.trim() ||
+    req.headers.get("x-memstream-org")?.trim() ||
+    null
+  );
+}
+
+/** List saved workspaces (no secrets). */
+export async function GET(req: Request) {
+  const denied = guardConsoleApi(req);
+  if (denied) return denied;
+
+  const root = webRepoRoot();
+  if (!memstreamDatabaseUrl(root)) {
+    return jsonOk({ connections: [], configured: false });
+  }
+  const orgId = orgIdFrom(req);
+  try {
+    const connections = await listConnections(root, orgId);
+    return jsonOk({
+      configured: true,
+      connections: connections.map((c) => publicConnection(c)),
+    });
+  } catch (err) {
+    return jsonError(err instanceof Error ? err.message : String(err), 500);
+  }
+}
+
+/** Activate an existing workspace (reuse without re-entering Cloud/URL secrets). */
+export async function POST(req: Request) {
+  const denied = guardConsoleApi(req);
+  if (denied) return denied;
+
+  const root = webRepoRoot();
+  if (!memstreamDatabaseUrl(root)) {
+    return jsonError(
+      "MEMSTREAM_DATABASE_URL required to store the application connection",
+      503,
+    );
+  }
+  const body = ((await readJsonBody(req as never)) || {}) as {
+    id?: string;
+    org_id?: string;
+  };
+  const id = body.id?.trim() || "";
+  if (!id) return jsonError("id required");
+  const orgId = orgIdFrom(req, body.org_id);
+  try {
+    const connection = await activateConnection(id, root, orgId);
+    return jsonOk({ connection: publicConnection(connection) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = /not found/i.test(message) ? 404 : 500;
+    return jsonError(message, status);
+  }
 }
 
 export async function PUT(req: Request) {
@@ -64,10 +128,7 @@ export async function PUT(req: Request) {
       "Paste a real Cockroach DATABASE_URL (not a placeholder)",
     );
   }
-  const orgId =
-    body.org_id?.trim() ||
-    req.headers.get("x-memstream-org")?.trim() ||
-    undefined;
+  const orgId = orgIdFrom(req, body.org_id);
   try {
     const connection = await upsertConnection({
       databaseUrl,
@@ -76,7 +137,7 @@ export async function PUT(req: Request) {
       prefix: body.prefix,
       name: body.name,
       id: body.id,
-      orgId: orgId || null,
+      orgId,
       root,
     });
     return jsonOk({ connection: publicConnection(connection) });

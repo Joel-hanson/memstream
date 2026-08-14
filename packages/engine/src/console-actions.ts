@@ -1,14 +1,20 @@
 /** Console actions: schema, pipeline, enable, profiles. */
 
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { cancelChangefeed, createChangefeed } from "./changefeed.js";
+import {
+  getActiveConnection,
+  getConnection,
+  upsertConnection,
+} from "./connections.js";
+import { JOB_STEP_STATUS, RUN_STATUS } from "./constants.js";
 import { withClient, withClientObjects } from "./db.js";
 import {
   deleteAwsStack,
@@ -17,6 +23,7 @@ import {
 } from "./deploy-aws.js";
 import { deployLambdaStack } from "./deploy-lambda.js";
 import { fetchPublicTables, proposeProfileDict } from "./discover.js";
+import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
 import type { Job } from "./jobs.js";
 import { bindJobToRun } from "./jobs.js";
 import {
@@ -24,6 +31,8 @@ import {
   PIPELINE_LABELS,
   resourceById,
 } from "./naming.js";
+import { derivePipelineHealth } from "./pipeline-health.js";
+import { resilientS3, withResilience } from "./resilience.js";
 import {
   createRun,
   deleteRun,
@@ -33,24 +42,15 @@ import {
   memstreamDatabaseUrl,
   updateRunProgress,
 } from "./runs.js";
-import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
-import {
-  getActiveConnection,
-  getConnection,
-  upsertConnection,
-} from "./connections.js";
+import { cdcScopeId } from "./state.js";
 import {
   cloudWorkerStackName,
   isPrebuiltRuntime,
   resolveWorkerCompute,
-  workerComputeLabel,
   WORKER_COMPUTE,
+  workerComputeLabel,
   type WorkerCompute,
 } from "./worker-compute.js";
-import { derivePipelineHealth } from "./pipeline-health.js";
-import { cdcScopeId } from "./state.js";
-import { JOB_STEP_STATUS, RUN_STATUS } from "./constants.js";
-import { resilientS3, withResilience } from "./resilience.js";
 
 /** Stop on-box S3 poller so Lambda is the only consumer of the CDC prefix. */
 function stopPrebuiltWatch(job: Job): void {
@@ -496,7 +496,7 @@ export async function buildPipelineStatus(options: {
     try {
       mem = await memoryMetrics(databaseUrl, resolvedConnectionId);
       feeds = await changefeedMetrics(databaseUrl);
-      recent = await listRecentChunks(databaseUrl, 5, resolvedConnectionId);
+      recent = await listRecentChunks(databaseUrl, 25, resolvedConnectionId);
       dbOk = true;
     } catch (err) {
       dbError = err instanceof Error ? err.message : String(err);
@@ -846,7 +846,12 @@ export async function runEnablePipeline(
       region: options.region,
       tables: options.tables,
     });
-    job.append(`${changes.label}: ready (${result.jobRows} job(s))`);
+    if (result.canceledJobs.length) {
+      job.append(
+        `${changes.label}: canceled ${result.canceledJobs.length} prior job(s) before recreate`,
+      );
+    }
+    job.append(`${changes.label}: ready (${result.jobRows} active job(s))`);
     job.setStep("changefeed", {
       status: JOB_STEP_STATUS.DONE,
       detail: `Streaming ${options.tables}`,
@@ -1075,8 +1080,19 @@ export async function teardownAndDeleteRun(
 export async function proposeFromDatabase(options: {
   databaseUrl: string;
   application?: string;
+  /** When set, only these public tables are considered for the draft. */
+  includeTables?: string[];
 }): Promise<{ profile: Record<string, unknown>; tables_scanned: string[] }> {
-  const tables = await fetchPublicTables(options.databaseUrl);
+  let tables = await fetchPublicTables(options.databaseUrl);
+  const include = (options.includeTables || [])
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (include.length) {
+    const allow = new Set(include);
+    tables = Object.fromEntries(
+      Object.entries(tables).filter(([name]) => allow.has(name)),
+    );
+  }
   if (!Object.keys(tables).length) throw new Error("no public tables found");
   const profile = proposeProfileDict({
     application: options.application || "discovered-app",

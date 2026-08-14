@@ -6,7 +6,7 @@ import { resolveRequestDatabaseUrl } from "@/lib/resolve-database-url";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const denied = guardConsoleApi(req);
+  const denied = guardConsoleApi(req, { poll: true });
   if (denied) return denied;
 
   const body = ((await readJsonBody(req as never)) || {}) as {

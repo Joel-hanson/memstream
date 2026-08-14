@@ -1,22 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
-import { useFormStatus } from "react-dom";
-import {
-  adjustStockAction,
-  openTicketAction,
-  placeOrderAction,
-  setStockAction,
-  setUserRoleAction,
-  shipOrderAction,
-} from "@/app/shop/actions";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ShopAskChat } from "@/components/shop-support-chat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { consoleApi } from "@/lib/api-client";
+import { postShop, type ShopState } from "@/lib/shop-client-api";
 import {
   DEMO_ASK_PROMPT,
   productForSku,
@@ -58,31 +49,35 @@ function orderSku(order: Row | null): string | null {
   return String(order.sku);
 }
 
-function PendingButton({
+function ActionButton({
   label,
   pendingLabel,
+  busy,
   variant = "default",
   disabled = false,
   size = "default",
   icon,
+  onClick,
 }: {
   label: string;
   pendingLabel: string;
+  busy: boolean;
   variant?: "default" | "outline" | "secondary";
   disabled?: boolean;
   size?: "default" | "sm" | "lg";
   icon?: ReactNode;
+  onClick?: () => void;
 }) {
-  const { pending } = useFormStatus();
   return (
     <Button
-      type="submit"
+      type={onClick ? "button" : "submit"}
       size={size}
       variant={variant}
-      disabled={disabled || pending}
+      disabled={disabled || busy}
+      onClick={onClick}
     >
-      {pending ? <Spinner /> : icon}
-      {pending ? pendingLabel : label}
+      {busy ? <Spinner /> : icon}
+      {busy ? pendingLabel : label}
     </Button>
   );
 }
@@ -171,20 +166,60 @@ export function ShopClient({
   const [mcpCopied, setMcpCopied] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHint, setChatHint] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [shop, setShop] = useState<ShopState>({
+    orders,
+    stock,
+    tickets,
+    users,
+    backend,
+    message,
+    error,
+  });
+
+  const {
+    orders: liveOrders,
+    stock: liveStock,
+    tickets: liveTickets,
+    users: liveUsers,
+    backend: liveBackend,
+    message: liveMessage,
+    error: liveError,
+  } = shop;
+
+  async function runShopAction(key: string, request: () => Promise<ShopState>) {
+    setBusyKey(key);
+    try {
+      const next = await request();
+      setShop({
+        ...next,
+        message: next.message,
+        error: undefined,
+      });
+    } catch (err) {
+      setShop((prev) => ({
+        ...prev,
+        message: undefined,
+        error: err instanceof Error ? err.message : "Request failed",
+      }));
+    } finally {
+      setBusyKey(null);
+    }
+  }
 
   const stockBySku = new Map(
-    stock.map((r) => [String(r.sku), Number(r.quantity)]),
+    liveStock.map((r) => [String(r.sku), Number(r.quantity)]),
   );
 
   const ticketByOrder = new Map(
-    tickets.map((t) => [String(t.order_id), t] as const),
+    liveTickets.map((t) => [String(t.order_id), t] as const),
   );
 
-  const myOrders = orders
+  const myOrders = liveOrders
     .filter((o) => String(o.customer_id) === SHOPPER_ID)
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
-  const allOrders = [...orders].sort((a, b) =>
+  const allOrders = [...liveOrders].sort((a, b) =>
     String(a.id).localeCompare(String(b.id)),
   );
 
@@ -232,10 +267,18 @@ export function ShopClient({
   }
 
   async function copyMcpConfig() {
-    const result = await consoleApi.mcpConfig();
-    if (!result.ok || !result.value.json) return;
+    const base = (
+      process.env.NEXT_PUBLIC_MEMSTREAM_URL || "http://127.0.0.1:3000"
+    ).replace(/\/$/, "");
     try {
-      await copyToClipboard(result.value.json);
+      const res = await fetch(`${base}/api/mcp-config`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { json?: string; config?: unknown };
+      const text =
+        data.json ||
+        (data.config ? JSON.stringify(data.config, null, 2) : "");
+      if (!text) return;
+      await copyToClipboard(text);
       setMcpCopied(true);
       window.setTimeout(() => setMcpCopied(false), 2000);
     } catch {
@@ -245,7 +288,7 @@ export function ShopClient({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-40 border-b border-foreground/10 bg-[oklch(0.985_0.004_85)]/95 backdrop-blur-sm">
+      <header className="sticky top-0 z-40 border-b border-border/80 bg-background/90 backdrop-blur-sm">
         <div className="mx-auto flex h-14 w-full max-w-3xl items-center gap-3 px-4">
           <div className="min-w-0 leading-tight">
             <div className="font-(family-name:--font-shop-display) text-xl tracking-tight">
@@ -259,7 +302,7 @@ export function ShopClient({
           </div>
 
           <div
-            className="ml-auto flex shrink-0 border border-foreground/15 p-0.5"
+            className="ml-auto flex shrink-0 overflow-hidden rounded-md border border-border p-0.5"
             role="tablist"
             aria-label="Shop mode"
           >
@@ -268,9 +311,9 @@ export function ShopClient({
               role="tab"
               aria-selected={mode === "customer"}
               className={cn(
-                "px-2.5 py-1 text-xs transition-colors",
+                "rounded-sm px-2.5 py-1 text-xs transition-colors",
                 mode === "customer"
-                  ? "bg-foreground text-background"
+                  ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => setMode("customer")}
@@ -282,9 +325,9 @@ export function ShopClient({
               role="tab"
               aria-selected={mode === "staff"}
               className={cn(
-                "px-2.5 py-1 text-xs transition-colors",
+                "rounded-sm px-2.5 py-1 text-xs transition-colors",
                 mode === "staff"
-                  ? "bg-foreground text-background"
+                  ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => setMode("staff")}
@@ -326,18 +369,18 @@ export function ShopClient({
       </header>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-10 px-4 pt-6 pb-28">
-        {error ? (
-          <div className="border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
+        {liveError ? (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {liveError}
           </div>
         ) : null}
 
-        {message ? (
-          <div className="animate-in fade-in slide-in-from-top-2 border border-foreground/15 bg-background px-4 py-3 duration-500">
+        {liveMessage ? (
+          <div className="animate-in fade-in slide-in-from-top-2 rounded-lg border border-border bg-card px-4 py-3 duration-500">
             <div className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
               Just now
             </div>
-            <p className="mt-1 text-sm">{message}</p>
+            <p className="mt-1 text-sm">{liveMessage}</p>
           </div>
         ) : null}
 
@@ -352,7 +395,7 @@ export function ShopClient({
                   Browse and buy. If something arrives broken, report it on your
                   order — then ask Support.
                 </p>
-                {backend !== "cockroach" ? (
+                {liveBackend !== "cockroach" ? (
                   <p className="mt-2 text-xs text-destructive">
                     Shop is on in-memory backend — connect Cockroach for the full
                     demo.
@@ -367,7 +410,7 @@ export function ShopClient({
                   return (
                     <article
                       key={product.sku}
-                      className="flex flex-col border border-foreground/15 bg-background"
+                      className="flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm"
                     >
                       <div className="aspect-square border-b border-foreground/10">
                         <ProductArt product={product} />
@@ -384,22 +427,25 @@ export function ShopClient({
                             {product.sku} · {out ? "sold out" : `${qty} left`}
                           </p>
                         </div>
-                        <form action={placeOrderAction} className="mt-auto">
-                          <input type="hidden" name="sku" value={product.sku} />
-                          <input type="hidden" name="quantity" value="1" />
-                          <input
-                            type="hidden"
-                            name="customer_id"
-                            value={SHOPPER_ID}
-                          />
-                          <PendingButton
+                        <div className="mt-auto">
+                          <ActionButton
                             label={out ? "Sold out" : "Buy"}
                             pendingLabel="Buying…"
                             size="sm"
                             disabled={out}
+                            busy={busyKey === `buy:${product.sku}`}
                             icon={<RiShoppingBag3Line />}
+                            onClick={() =>
+                              void runShopAction(`buy:${product.sku}`, () =>
+                                postShop("/api/shop/orders", {
+                                  sku: product.sku,
+                                  quantity: 1,
+                                  customer_id: SHOPPER_ID,
+                                }),
+                              )
+                            }
                           />
-                        </form>
+                        </div>
                       </div>
                     </article>
                   );
@@ -414,9 +460,9 @@ export function ShopClient({
                     return (
                       <article
                         key={product.sku}
-                        className="flex items-center gap-3 border border-dashed px-3 py-2"
+                        className="flex items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2"
                       >
-                        <div className="size-14 shrink-0 border border-foreground/10">
+                        <div className="size-14 shrink-0 overflow-hidden rounded-md border border-border">
                           <ProductArt product={product} />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -427,22 +473,23 @@ export function ShopClient({
                             {product.sku} · {out ? "sold out" : `${qty} left`}
                           </div>
                         </div>
-                        <form action={placeOrderAction}>
-                          <input type="hidden" name="sku" value={product.sku} />
-                          <input type="hidden" name="quantity" value="1" />
-                          <input
-                            type="hidden"
-                            name="customer_id"
-                            value={SHOPPER_ID}
-                          />
-                          <PendingButton
-                            label="Buy"
-                            pendingLabel="…"
-                            size="sm"
-                            variant="outline"
-                            disabled={out}
-                          />
-                        </form>
+                        <ActionButton
+                          label="Buy"
+                          pendingLabel="…"
+                          size="sm"
+                          variant="outline"
+                          disabled={out}
+                          busy={busyKey === `buy:${product.sku}`}
+                          onClick={() =>
+                            void runShopAction(`buy:${product.sku}`, () =>
+                              postShop("/api/shop/orders", {
+                                sku: product.sku,
+                                quantity: 1,
+                                customer_id: SHOPPER_ID,
+                              }),
+                            )
+                          }
+                        />
                       </article>
                     );
                   })}
@@ -463,7 +510,7 @@ export function ShopClient({
 
               <ul className="space-y-3">
                 {myOrders.length === 0 ? (
-                  <li className="border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                  <li className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                     No orders yet — buy a lamp above.
                   </li>
                 ) : (
@@ -481,10 +528,10 @@ export function ShopClient({
                       <li
                         key={id}
                         className={cn(
-                          "border bg-background px-4 py-4",
+                          "rounded-lg border bg-card px-4 py-4 shadow-sm",
                           done
-                            ? "border-foreground/10 bg-muted/20"
-                            : "border-foreground/20",
+                            ? "border-border bg-muted/30"
+                            : "border-border",
                         )}
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -525,20 +572,20 @@ export function ShopClient({
 
                           <div className="flex flex-wrap gap-2">
                             {canTicket ? (
-                              <form action={openTicketAction}>
-                                <input
-                                  type="hidden"
-                                  name="order_id"
-                                  value={id}
-                                />
-                                <input type="hidden" name="body" value="" />
-                                <PendingButton
-                                  label="Report damage"
-                                  pendingLabel="Opening…"
-                                  size="sm"
-                                  icon={<RiCustomerService2Line />}
-                                />
-                              </form>
+                              <ActionButton
+                                label="Report damage"
+                                pendingLabel="Opening…"
+                                size="sm"
+                                busy={busyKey === `ticket:${id}`}
+                                icon={<RiCustomerService2Line />}
+                                onClick={() =>
+                                  void runShopAction(`ticket:${id}`, () =>
+                                    postShop("/api/shop/tickets", {
+                                      order_id: id,
+                                    }),
+                                  )
+                                }
+                              />
                             ) : null}
                             {done ? (
                               <Button
@@ -587,7 +634,7 @@ export function ShopClient({
                   return (
                     <li
                       key={id}
-                      className="border border-foreground/15 bg-background px-4 py-4"
+                      className="rounded-lg border border-border bg-card px-4 py-4 shadow-sm"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="min-w-0 space-y-1">
@@ -607,15 +654,21 @@ export function ShopClient({
                           </p>
                         </div>
                         {pending ? (
-                          <form action={shipOrderAction}>
-                            <input type="hidden" name="order_id" value={id} />
-                            <PendingButton
-                              label="Ship"
-                              pendingLabel="Shipping…"
-                              size="sm"
-                              icon={<RiTruckLine />}
-                            />
-                          </form>
+                          <ActionButton
+                            label="Ship"
+                            pendingLabel="Shipping…"
+                            size="sm"
+                            busy={busyKey === `ship:${id}`}
+                            icon={<RiTruckLine />}
+                            onClick={() =>
+                              void runShopAction(`ship:${id}`, () =>
+                                postShop(
+                                  `/api/shop/orders/${encodeURIComponent(id)}/ship`,
+                                  {},
+                                ),
+                              )
+                            }
+                          />
                         ) : (
                           <span className="text-xs text-muted-foreground">
                             Shipped
@@ -637,14 +690,14 @@ export function ShopClient({
                   Stock writes become memory too — use for the similarity ask.
                 </p>
               </div>
-              {stock.map((row) => {
+              {liveStock.map((row) => {
                 const sku = String(row.sku);
                 const available = Number(row.quantity);
                 const outOfStock = !(available > 0);
                 return (
                   <div
                     key={sku}
-                    className="flex flex-wrap items-center gap-2 border px-3 py-2"
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"
                   >
                     <div className="min-w-0 flex-1 text-xs">
                       <span className="font-medium">
@@ -656,34 +709,48 @@ export function ShopClient({
                         {outOfStock ? "out of stock" : `${available} in stock`}
                       </span>
                     </div>
-                    <form action={adjustStockAction}>
-                      <input type="hidden" name="sku" value={sku} />
-                      <input type="hidden" name="delta" value="-1" />
-                      <PendingButton
-                        label="−1"
-                        pendingLabel="…"
-                        size="sm"
-                        variant="secondary"
-                        disabled={outOfStock}
-                      />
-                    </form>
-                    <form action={adjustStockAction}>
-                      <input type="hidden" name="sku" value={sku} />
-                      <input type="hidden" name="delta" value="10" />
-                      <PendingButton
-                        label="+10"
-                        pendingLabel="…"
-                        size="sm"
-                        variant="secondary"
-                        icon={<RiAddLine />}
-                      />
-                    </form>
+                    <ActionButton
+                      label="−1"
+                      pendingLabel="…"
+                      size="sm"
+                      variant="secondary"
+                      disabled={outOfStock}
+                      busy={busyKey === `stock:${sku}:-1`}
+                      onClick={() =>
+                        void runShopAction(`stock:${sku}:-1`, () =>
+                          postShop("/api/shop/stock", { sku, delta: -1 }),
+                        )
+                      }
+                    />
+                    <ActionButton
+                      label="+10"
+                      pendingLabel="…"
+                      size="sm"
+                      variant="secondary"
+                      busy={busyKey === `stock:${sku}:10`}
+                      icon={<RiAddLine />}
+                      onClick={() =>
+                        void runShopAction(`stock:${sku}:10`, () =>
+                          postShop("/api/shop/stock", { sku, delta: 10 }),
+                        )
+                      }
+                    />
                     <form
-                      action={setStockAction}
                       className="flex items-center gap-1"
+                      onSubmit={(e: FormEvent<HTMLFormElement>) => {
+                        e.preventDefault();
+                        const quantity = Math.floor(
+                          Number(
+                            new FormData(e.currentTarget).get("quantity"),
+                          ),
+                        );
+                        void runShopAction(`stock:${sku}:set`, () =>
+                          postShop("/api/shop/stock", { sku, quantity }),
+                        );
+                      }}
                     >
-                      <input type="hidden" name="sku" value={sku} />
                       <Input
+                        key={`${sku}-${available}`}
                         name="quantity"
                         className="h-7 w-16"
                         type="number"
@@ -691,32 +758,38 @@ export function ShopClient({
                         defaultValue={available}
                         aria-label={`Set quantity for ${sku}`}
                       />
-                      <PendingButton
+                      <ActionButton
                         label="Set"
                         pendingLabel="…"
                         size="sm"
                         variant="outline"
+                        busy={busyKey === `stock:${sku}:set`}
                       />
                     </form>
                   </div>
                 );
               })}
               <div className="flex flex-wrap gap-2">
-                <form action={adjustStockAction}>
-                  <input type="hidden" name="sku" value="SKU-12" />
-                  <input type="hidden" name="delta" value="-1" />
-                  <PendingButton
-                    label={
-                      canDropSku12
-                        ? `Drop Field Lamp (${sku12Qty} left)`
-                        : "Field Lamp out of stock"
-                    }
-                    pendingLabel="Updating…"
-                    size="sm"
-                    variant="secondary"
-                    disabled={!canDropSku12}
-                  />
-                </form>
+                <ActionButton
+                  label={
+                    canDropSku12
+                      ? `Drop Field Lamp (${sku12Qty} left)`
+                      : "Field Lamp out of stock"
+                  }
+                  pendingLabel="Updating…"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!canDropSku12}
+                  busy={busyKey === "stock:SKU-12:-1"}
+                  onClick={() =>
+                    void runShopAction("stock:SKU-12:-1", () =>
+                      postShop("/api/shop/stock", {
+                        sku: "SKU-12",
+                        delta: -1,
+                      }),
+                    )
+                  }
+                />
                 <Button
                   type="button"
                   size="sm"
@@ -729,7 +802,7 @@ export function ShopClient({
               </div>
             </section>
 
-            {users.length > 0 ? (
+            {liveUsers.length > 0 ? (
               <section id="path-security" className="space-y-3">
                 <div>
                   <h2 className="font-(family-name:--font-shop-display) text-xl tracking-tight">
@@ -740,7 +813,7 @@ export function ShopClient({
                   </p>
                 </div>
                 <ul className="space-y-2">
-                  {users.map((u) => {
+                  {liveUsers.map((u) => {
                     const id = String(u.id);
                     const email = String(u.email ?? id);
                     const role = String(u.role ?? "");
@@ -752,7 +825,7 @@ export function ShopClient({
                     return (
                       <li
                         key={id}
-                        className="flex flex-wrap items-center justify-between gap-2 border px-3 py-2 text-xs"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs"
                       >
                         <div className="min-w-0">
                           <span className="font-medium">{email}</span>
@@ -762,22 +835,38 @@ export function ShopClient({
                           </span>
                         </div>
                         {canPromote ? (
-                          <form action={setUserRoleAction}>
-                            <input type="hidden" name="user_id" value={id} />
-                            <input type="hidden" name="role" value={nextRole} />
-                            <PendingButton
-                              label={`Promote to ${nextRole}`}
-                              pendingLabel="Updating…"
-                              size="sm"
-                              variant="secondary"
-                            />
-                          </form>
+                          <ActionButton
+                            label={`Promote to ${nextRole}`}
+                            pendingLabel="Updating…"
+                            size="sm"
+                            variant="secondary"
+                            busy={busyKey === `role:${id}`}
+                            onClick={() =>
+                              void runShopAction(`role:${id}`, () =>
+                                postShop(
+                                  `/api/shop/users/${encodeURIComponent(id)}/role`,
+                                  { role: nextRole },
+                                ),
+                              )
+                            }
+                          />
                         ) : (
                           <form
-                            action={setUserRoleAction}
                             className="flex items-center gap-1"
+                            onSubmit={(e: FormEvent<HTMLFormElement>) => {
+                              e.preventDefault();
+                              const next = String(
+                                new FormData(e.currentTarget).get("role") ||
+                                  "",
+                              ).trim();
+                              void runShopAction(`role:${id}`, () =>
+                                postShop(
+                                  `/api/shop/users/${encodeURIComponent(id)}/role`,
+                                  { role: next },
+                                ),
+                              );
+                            }}
                           >
-                            <input type="hidden" name="user_id" value={id} />
                             <Input
                               name="role"
                               className="h-7 w-24"
@@ -786,11 +875,12 @@ export function ShopClient({
                               }
                               aria-label={`New role for ${email}`}
                             />
-                            <PendingButton
+                            <ActionButton
                               label="Set role"
                               pendingLabel="…"
                               size="sm"
                               variant="outline"
+                              busy={busyKey === `role:${id}`}
                             />
                           </form>
                         )}
@@ -810,7 +900,7 @@ export function ShopClient({
               </section>
             ) : null}
 
-            <section className="space-y-3 border border-foreground/15 bg-background px-4 py-4">
+            <section className="space-y-3 rounded-xl border border-border bg-card px-4 py-4 shadow-sm">
               <div>
                 <h2 className="font-(family-name:--font-shop-display) text-xl tracking-tight">
                   Staff agent
@@ -838,7 +928,7 @@ export function ShopClient({
               </div>
             </section>
 
-            <section className="space-y-3 border border-dashed px-4 py-4">
+            <section className="space-y-3 rounded-xl border border-dashed border-border px-4 py-4">
               <div>
                 <h2 className="text-sm font-medium">Optional: Cursor + MCP</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">

@@ -1,3 +1,3 @@
 {"table":"orders","key":{"id":"100"},"before":{"id":"100","customer_id":"c1","sku":"SKU-12","quantity":2,"status":"pending","note":null},"after":{"id":"100","customer_id":"c1","sku":"SKU-12","quantity":2,"status":"shipped","note":null},"timestamp":"2026-08-07T10:00:00Z"}
 {"table":"stock","key":{"sku":"SKU-12"},"before":{"sku":"SKU-12","quantity":40,"warehouse_id":"east"},"after":{"sku":"SKU-12","quantity":5,"warehouse_id":"east"},"timestamp":"2026-08-07T10:01:00Z"}
-{"table":"tickets","key":{"id":"t-100"},"before":{"id":"t-100","order_id":"100","status":"open","body":""},"after":{"id":"t-100","order_id":"100","status":"open","body":"SKU-12 arrived damaged — Alex is upset"},"timestamp":"2026-08-07T10:05:00Z"}
+{"table":"tickets","key":{"id":"t-100"},"before":{"id":"t-100","order_id":"100","status":"open","body":""},"after":{"id":"t-100","order_id":"100","status":"open","body":"SKU-12 arrived damaged — Alex (c1) is upset"},"timestamp":"2026-08-07T10:05:00Z"}

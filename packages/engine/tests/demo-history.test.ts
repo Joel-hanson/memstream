@@ -16,12 +16,23 @@ describe("demo-history", () => {
     expect(text).toContain("Waiting on warehouse replace.");
   });
 
-  it("ships three curated history seeds", () => {
-    expect(DEMO_HISTORY_SEEDS).toHaveLength(3);
+  it("ships four curated history seeds", () => {
+    expect(DEMO_HISTORY_SEEDS).toHaveLength(4);
     expect(DEMO_HISTORY_SEEDS.map((s) => s.tableName).sort()).toEqual([
+      "case_notes",
       "case_notes",
       "orders",
       "tickets",
     ]);
+  });
+
+  it("seeds the weekend-availability note before the order 90 backstory", () => {
+    const [first] = DEMO_HISTORY_SEEDS;
+    expect(first!.body).toContain("n-89");
+    expect(first!.body).toContain("weekends");
+    expect(first!.body).toContain("Alex (c1)");
+    expect(new Date(first!.sourceTs).getTime()).toBeLessThan(
+      new Date(DEMO_HISTORY_SEEDS[1]!.sourceTs).getTime(),
+    );
   });
 });

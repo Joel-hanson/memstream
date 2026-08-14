@@ -3,14 +3,15 @@
  * Reset Memstream to a clean demo starting state for video rehearsal.
  *
  * Default (--full): shop seed + clear memory + prune platform clutter +
- * reseed profiles from profiles/*.yaml + clear S3 CDC prefix objects.
- * Does NOT destroy AWS stacks or cancel changefeeds, and keeps the active
- * Connect workspace.
+ * reseed profiles from profiles/*.yaml + cancel Memstream changefeed jobs +
+ * clear S3 CDC prefix objects.
+ * Does NOT destroy AWS stacks, and keeps the active Connect workspace.
  */
 
 import { rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { cancelChangefeed } from "./changefeed.js";
 import { getActiveConnection } from "./connections.js";
 import { clearS3CdcPrefix } from "./console-actions.js";
 import { closePools, withClientObjects } from "./db.js";
@@ -82,6 +83,7 @@ async function main(): Promise<number> {
       "keep-memory": { type: "boolean", default: false },
       "keep-cdc-inbox": { type: "boolean", default: false },
       "keep-s3-cdc": { type: "boolean", default: false },
+      "keep-changefeeds": { type: "boolean", default: false },
       "keep-cdc-keys": { type: "boolean", default: false },
       "keep-runs": { type: "boolean", default: false },
       "keep-inactive-connections": { type: "boolean", default: false },
@@ -100,7 +102,8 @@ Reset to a clean demo beginning (ship → ticket → ask).
 Default (--full):
   Application DB
   • customers Alex/Sam; orders 90 (past) + 100/101 pending; stock SKU-12=40, SKU-99=10
-  • seed closed ticket t-90 + case note n-90 (Alex late-delivery backstory)
+  • seed closed ticket t-90 + case notes n-89/n-90 (Alex weekend-only
+    availability + late-delivery backstory)
   • delete other tickets / case notes / extra orders
   • reset saas-security users seed (u1 member / u2 owner)
   • clear agent_memory_chunks, then re-embed curated history (Bedrock)
@@ -114,6 +117,7 @@ Default (--full):
   • force-reseed memstream_profiles from profiles/*.yaml as builtin
 
   Local / S3 / leftovers
+  • cancel active Memstream changefeed jobs and drop external://memstream_s3
   • clear data/cdc/inbox
   • clear objects under CDC S3 prefix (bucket/prefix from Connect or CDC_S3_*)
   • drop leftover demo tables from defaultdb (early-dev junk)
@@ -122,6 +126,7 @@ Default (--full):
   --keep-memory          do not clear or re-seed agent_memory_chunks
   --keep-cdc-inbox       keep data/cdc/inbox
   --keep-s3-cdc          keep S3 objects under the CDC prefix
+  --keep-changefeeds     leave Cockroach changefeed jobs running
   --keep-cdc-keys        keep memstream_cdc_keys
   --keep-runs            keep memstream_runs
   --keep-inactive-connections
@@ -132,9 +137,8 @@ Default (--full):
 Application DB URL (first match):
   --database-url | active Connect connection | DATABASE_URL
 
-Does not destroy CloudFormation / cancel changefeeds (S3 CDC objects only).
-After pulling case_notes into commerce profile, re-Enable (or recreate the
-changefeed) so live support handoffs stream into memory.
+Does not destroy CloudFormation. Re-Enable after reset so a fresh changefeed
+covers live shop traffic (unless --keep-changefeeds).
 `);
     return 0;
   }
@@ -175,12 +179,31 @@ changefeed) so live support handoffs stream into memory.
   const keepMemory = Boolean(values["keep-memory"]);
   const keepInbox = Boolean(values["keep-cdc-inbox"]);
   const keepS3Cdc = Boolean(values["keep-s3-cdc"]);
+  const keepChangefeeds = Boolean(values["keep-changefeeds"]);
   const keepCdcKeys = Boolean(values["keep-cdc-keys"]);
   const keepRuns = Boolean(values["keep-runs"]);
   const keepInactive = Boolean(values["keep-inactive-connections"]);
   const keepProfiles = Boolean(values["keep-profiles"]);
   const keepOrgs = Boolean(values["keep-orgs"]);
   const skipDefaultdb = Boolean(values["skip-defaultdb"]);
+
+  let canceledJobs: string[] | null = null;
+  let droppedConnection: boolean | null = null;
+  if (keepChangefeeds) {
+    canceledJobs = [];
+  } else {
+    try {
+      const canceled = await cancelChangefeed({ databaseUrl });
+      canceledJobs = canceled.canceledJobs;
+      droppedConnection = canceled.droppedConnection;
+    } catch (err) {
+      console.error(
+        `warn: could not cancel changefeed jobs: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  }
 
   const summary = await withClientObjects(databaseUrl, async (client) => {
     await client.query(`
@@ -214,7 +237,7 @@ changefeed) so live support handoffs stream into memory.
     await client.query(`
       INSERT INTO orders (id, customer_id, status, sku, quantity, note, updated_at)
       VALUES
-        ('90', 'c1', 'shipped', 'SKU-12', 1, 'Shipped 1× SKU-12 for Alex', now()),
+        ('90', 'c1', 'shipped', 'SKU-12', 1, 'Shipped 1× SKU-12 for Alex (c1)', now()),
         ('100', 'c1', 'pending', 'SKU-12', 1, NULL, now()),
         ('101', 'c2', 'pending', 'SKU-99', 1, NULL, now())
       ON CONFLICT (id) DO UPDATE SET
@@ -231,7 +254,7 @@ changefeed) so live support handoffs stream into memory.
       WHERE id IN ('100', '101')`);
     await client.query(`
       UPDATE orders SET status = 'shipped',
-        note = 'Shipped 1× SKU-12 for Alex', updated_at = now()
+        note = 'Shipped 1× SKU-12 for Alex (c1)', updated_at = now()
       WHERE id = '90'`);
 
     await client.query(`
@@ -240,7 +263,7 @@ changefeed) so live support handoffs stream into memory.
           't-90',
           '90',
           'closed',
-          'Alex reported late delivery on Field Lamp order 90; shipping credit issued and case closed.',
+          'Alex (c1) reported late delivery on Field Lamp order 90 after asking for weekend delivery since they''re away on weekdays; shipping credit issued and case closed.',
           now()
         )
       ON CONFLICT (id) DO UPDATE SET
@@ -252,11 +275,19 @@ changefeed) so live support handoffs stream into memory.
     await client.query(`
       INSERT INTO case_notes (id, order_id, ticket_id, author, body, updated_at) VALUES
         (
+          'n-89',
+          '90',
+          't-90',
+          'staff',
+          'Alex (c1) mentioned they''re away Monday-Friday for work and can only receive or hand off packages on weekends; that''s why the order 90 redelivery moved to Saturday. Noting for future scheduling.',
+          now()
+        ),
+        (
           'n-90',
           '90',
           't-90',
           'staff',
-          'Follow-up with Alex on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.',
+          'Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.',
           now()
         )
       ON CONFLICT (id) DO UPDATE SET
@@ -560,6 +591,17 @@ changefeed) so live support handoffs stream into memory.
   } else if (s3Skipped === "error") {
     console.log("  s3 cdc prefix: failed (see warn above)");
   }
+  if (keepChangefeeds) {
+    console.log("  changefeed jobs: kept (--keep-changefeeds)");
+  } else if (canceledJobs != null) {
+    console.log(
+      `  changefeed jobs canceled: ${canceledJobs.length}${
+        droppedConnection ? " (dropped external://memstream_s3)" : ""
+      }`,
+    );
+  } else {
+    console.log("  changefeed jobs: failed (see warn above)");
+  }
   if (platform.cdcKeys != null) {
     console.log(`  memstream_cdc_keys cleared: ${platform.cdcKeys}`);
   }
@@ -593,7 +635,9 @@ changefeed) so live support handoffs stream into memory.
   }
   console.log("");
   console.log(
-    "Next: open /shop → ship 100 → open ticket → ask Support/Staff (handoff saves to case_notes).",
+    keepChangefeeds
+      ? "Next: open /shop → ship 100 → open ticket → ask Support/Staff (handoff saves to case_notes)."
+      : "Next: Enable in the console (fresh changefeed), then /shop → ship 100 → ticket → ask.",
   );
   await closePools();
   return 0;
