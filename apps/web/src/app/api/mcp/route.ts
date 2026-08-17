@@ -2,6 +2,7 @@ import { handleMcpFetchRequest, resolveMcpRuntime } from "@memstream/mcp";
 import { webRepoRoot } from "@/lib/api";
 import { loadConnectDefaults } from "@/lib/env-defaults";
 import { requireMcpAuth } from "@/lib/mcp-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,8 @@ async function handle(req: Request): Promise<Response> {
   if (req.method !== "OPTIONS") {
     const denied = await requireMcpAuth(req);
     if (denied) return denied;
+    const limited = checkRateLimit(req, true);
+    if (limited) return limited;
   }
 
   const defaults = await loadConnectDefaults();

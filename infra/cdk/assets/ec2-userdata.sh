@@ -27,23 +27,35 @@ if [[ ! -f /opt/memstream/web/apps/web/server.js ]] && [[ ! -f /opt/memstream/we
 fi
 
 # AL2023 / modern accounts often require IMDSv2 (token). Plain GET returns empty.
-IMDS_TOKEN="$(curl -fsS --max-time 2 -X PUT \
-  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
-  http://169.254.169.254/latest/api/token 2>/dev/null || true)"
 imds_get() {
   local path="$1"
-  if [[ -n "$IMDS_TOKEN" ]]; then
-    curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${!IMDS_TOKEN}" \
+  local token="$2"
+  if [[ -n "$token" ]]; then
+    curl -fsS --max-time 3 -H "X-aws-ec2-metadata-token: ${!token}" \
       "http://169.254.169.254/latest/meta-data/${!path}" 2>/dev/null || true
   else
-    curl -fsS --max-time 2 "http://169.254.169.254/latest/meta-data/${!path}" 2>/dev/null || true
+    curl -fsS --max-time 3 "http://169.254.169.254/latest/meta-data/${!path}" 2>/dev/null || true
   fi
 }
 
 # Public IPv4 drives free sslip.io hostnames (no paid domain):
 #   https://<ip>.sslip.io/          → console
 #   https://shop.<ip>.sslip.io/     → shop
-PUBLIC_IP="$(imds_get public-ipv4)"
+# IMDS can lag behind address assignment on first boot — retry before failing.
+PUBLIC_IP=""
+IMDS_TOKEN=""
+for i in $(seq 1 40); do
+  IMDS_TOKEN="$(curl -fsS --max-time 3 -X PUT \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+    http://169.254.169.254/latest/api/token 2>/dev/null || true)"
+  PUBLIC_IP="$(imds_get public-ipv4 "$IMDS_TOKEN")"
+  if [[ -n "$PUBLIC_IP" ]]; then
+    echo "Resolved public IPv4 from IMDS: ${!PUBLIC_IP} (attempt ${!i})"
+    break
+  fi
+  echo "Waiting for public IPv4 from IMDS (${!i}/40)…"
+  sleep 3
+done
 if [[ -z "$PUBLIC_IP" ]]; then
   echo "ERROR: could not resolve public IPv4 from IMDS (needed for sslip.io HTTPS)" >&2
   exit 1
@@ -72,11 +84,13 @@ MEMSTREAM_POLL_INTERVAL=5
 MEMSTREAM_PREBUILT=1
 MEMSTREAM_ROOT=/opt/memstream
 MEMSTREAM_WORKER_COMPUTE=${MemstreamWorkerCompute}
+MEMSTREAM_CDC_SINK=keys
 SHOP_BACKEND=cockroach
 NODE_ENV=production
 PGSSLROOTCERT=/opt/memstream/certs/root.crt
 MEMSTREAM_SSLROOTCERT=/opt/memstream/certs/root.crt
 CONFIG_SECRET_ARN=${ConfigSecretArn}
+CDC_SINK_SECRET_ARN=${CdcSinkSecret}
 MEMSTREAM_DEMO_USER=demo
 MEMSTREAM_DEMO_PASSWORD=demo
 MEMSTREAM_AUTH_REQUIRED=1
@@ -90,6 +104,8 @@ ENVEOF
   echo "SHOP_HOST=${!SHOP_HOST}"
   echo "NEXT_PUBLIC_SHOP_URL=${!SHOP_PUBLIC_URL}"
   echo "NEXT_PUBLIC_MEMSTREAM_URL=${!CONSOLE_PUBLIC_URL}"
+  echo "MEMSTREAM_MCP_PUBLIC_URL=${!CONSOLE_PUBLIC_URL}"
+  echo "MEMSTREAM_MCP_ALLOWED_HOSTS=${!CONSOLE_HOST}:*"
 } >> /opt/memstream/.env
 
 # Secrets from Secrets Manager (preferred) or legacy CFN params (empty in new deploys)
@@ -97,21 +113,26 @@ python3 <<'PY'
 import json, os, subprocess
 env_path = "/opt/memstream/.env"
 arn = "${ConfigSecretArn}".strip()
+cdc_arn = "${CdcSinkSecret}".strip()
 region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "${AWS::Region}"
 values = {
   "DATABASE_URL": """${DatabaseUrl}""",
   "MEMSTREAM_DATABASE_URL": """${MemstreamDatabaseUrl}""",
   "MEMSTREAM_SECRETS_KEY": """${MemstreamSecretsKey}""",
 }
+
+def load_secret(secret_id):
+  out = subprocess.check_output(
+    ["aws", "secretsmanager", "get-secret-value",
+     "--secret-id", secret_id, "--region", region,
+     "--query", "SecretString", "--output", "text"],
+    text=True,
+  )
+  return json.loads(out)
+
 if arn:
   try:
-    out = subprocess.check_output(
-      ["aws", "secretsmanager", "get-secret-value",
-       "--secret-id", arn, "--region", region,
-       "--query", "SecretString", "--output", "text"],
-      text=True,
-    )
-    parsed = json.loads(out)
+    parsed = load_secret(arn)
     for k in ("DATABASE_URL", "MEMSTREAM_DATABASE_URL", "MEMSTREAM_SECRETS_KEY",
               "DEMO_APPLICATION_DATABASE_URL", "MEMSTREAM_DEMO_USER",
               "MEMSTREAM_DEMO_PASSWORD"):
@@ -119,6 +140,14 @@ if arn:
         values[k] = str(parsed[k])
   except Exception as e:
     print(f"WARN: could not load ConfigSecretArn: {e}", flush=True)
+if cdc_arn:
+  try:
+    parsed = load_secret(cdc_arn)
+    for k in ("MEMSTREAM_CDC_ACCESS_KEY_ID", "MEMSTREAM_CDC_SECRET_ACCESS_KEY"):
+      if parsed.get(k):
+        values[k] = str(parsed[k])
+  except Exception as e:
+    print(f"WARN: could not load CdcSinkSecret: {e}", flush=True)
 with open(env_path, "a", encoding="utf-8") as f:
   for k, v in values.items():
     if not v:

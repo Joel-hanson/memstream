@@ -25,8 +25,8 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-# Bust stale layer cache when schema/embed wiring changes
-ARG MEMSTREAM_BUILD_ID=embed-schema-v2
+# Bust stale layer cache (package-prebuilt.sh also passes git SHA)
+ARG MEMSTREAM_BUILD_ID=cdc-s3-keys-v1
 RUN echo "MEMSTREAM_BUILD_ID=${MEMSTREAM_BUILD_ID}" \
   && npm run build -w @memstream/engine \
   && npm run build -w @memstream/mcp \

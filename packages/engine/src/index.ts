@@ -119,6 +119,7 @@ export {
   isSafeSqlIdent,
   parseChangefeedTables,
   resolveAwsKeys,
+  resolveCdcSinkAuth,
   type CancelChangefeedResult,
   type ChangefeedResult,
 } from "./changefeed.js";
@@ -158,6 +159,7 @@ export {
   computeLagSeconds,
   derivePipelineHealth,
   isCdcRecent,
+  isWorkerCaughtUp,
   CDC_RECENT_SECONDS,
   MEMORY_LAG_WARN_SECONDS,
   type CheckStatus,

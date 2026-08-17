@@ -42,6 +42,11 @@ function sessionSecret(root = webRepoRoot()): string {
     parseEnvFile(join(root, ".env")).MEMSTREAM_CONSOLE_TOKEN?.trim() ||
     "";
   if (token) return token;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "MEMSTREAM_SECRETS_KEY required in production (openssl rand -hex 32)",
+    );
+  }
   return "memstream-dev-session";
 }
 

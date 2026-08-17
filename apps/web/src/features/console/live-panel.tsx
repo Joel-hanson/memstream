@@ -1,16 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  RiArrowDownSLine,
-  RiCheckLine,
-  RiDeleteBinLine,
-  RiFileCopyLine,
-  RiFlashlightLine,
-  RiPlugLine,
-  RiRefreshLine,
-  RiSettings3Line,
-} from "@remixicon/react";
 import { LogLines, MemoryChunkList } from "@/components/log-list";
 import { MemoryFlow } from "@/components/memory-flow";
 import { TermHint } from "@/components/term-hint";
@@ -33,11 +22,24 @@ import {
 import type { JobStatus, MemstreamRun, PipelineStatus } from "@/lib/types";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
+  RiArrowDownSLine,
+  RiCheckLine,
+  RiDeleteBinLine,
+  RiFileCopyLine,
+  RiFlashlightLine,
+  RiPlugLine,
+  RiRefreshLine,
+  RiSettings3Line,
+} from "@remixicon/react";
+import { useEffect, useState } from "react";
+import {
   resolveRunDisplayStatus,
   runProfileLabel,
   runStatusLabel,
 } from "./helpers";
 import type { BusyAction } from "./types";
+
+const SHOW_CONNECTION_HEALTH = true;
 
 function healthBadgeVariant(
   status: string | undefined,
@@ -426,14 +428,14 @@ export function LivePanel({
         </div>
       </div>
 
-      {pipeline ? (
+      {SHOW_CONNECTION_HEALTH && pipeline ? (
         <div
           className={cn(
             "border",
             isUnhealthy &&
-              (health?.status === "down" || pipeline.db_error
-                ? "border-destructive/50 bg-destructive/5"
-                : "border-destructive/35 bg-destructive/3"),
+            (health?.status === "down" || pipeline.db_error
+              ? "border-destructive/50 bg-destructive/5"
+              : "border-destructive/35 bg-destructive/3"),
           )}
         >
           <button
@@ -601,13 +603,11 @@ export function LivePanel({
               {pipeline?.db_error
                 ? pipeline.db_error
                 : recentChunks.length
-                  ? `${recentChunks.length} chunk${
-                      recentChunks.length === 1 ? "" : "s"
-                    }${
-                      recentTables.length
-                        ? ` from ${recentTables.slice(0, 3).join(", ")}`
-                        : ""
-                    }`
+                  ? `${recentChunks.length} chunk${recentChunks.length === 1 ? "" : "s"
+                  }${recentTables.length
+                    ? ` from ${recentTables.slice(0, 3).join(", ")}`
+                    : ""
+                  }`
                   : watching
                     ? "Waiting for a write on a watched table"
                     : "After Enable, new writes show up here"}

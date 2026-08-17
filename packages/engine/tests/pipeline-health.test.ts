@@ -80,6 +80,8 @@ describe("derivePipelineHealth", () => {
       ...base,
       latestChunkAt: "2026-08-08T11:50:00.000Z",
       latestCdcAt: "2026-08-08T11:59:00.000Z",
+      lastProcessedAt: "2026-08-08T11:50:00.000Z",
+      processedKeys: 2,
     });
     expect(h.memory.lag_seconds).toBeGreaterThanOrEqual(MEMORY_LAG_WARN_SECONDS);
     expect(h.memory.status).toBe("warn");
@@ -105,6 +107,8 @@ describe("derivePipelineHealth", () => {
       latestChunkAt: null,
       s3Objects: 4,
       latestCdcAt: "2026-08-08T11:59:00.000Z",
+      lastProcessedAt: null,
+      processedKeys: 0,
     });
     expect(h.memory.status).toBe("warn");
     expect(h.status).toBe("degraded");
@@ -121,6 +125,29 @@ describe("derivePipelineHealth", () => {
     expect(h.memory.status).toBe("idle");
     expect(h.memory.detail).toMatch(/Quiet|waiting for shop/i);
     expect(h.status).toBe("ok");
+  });
+
+  it("stays ok when Lambda has acked CDC keys but chunks are older (resolved ticks)", () => {
+    const h = derivePipelineHealth({
+      ...base,
+      latestChunkAt: "2026-08-08T11:50:00.000Z",
+      latestCdcAt: "2026-08-08T11:59:50.000Z",
+      lastProcessedAt: "2026-08-08T11:59:49.000Z",
+      processedKeys: 10,
+      s3Objects: 10,
+    });
+    expect(h.memory.lag_seconds).toBeGreaterThanOrEqual(MEMORY_LAG_WARN_SECONDS);
+    expect(h.memory.status).toBe("ok");
+    expect(h.status).toBe("ok");
+  });
+
+  it("does not degrade when the S3 list probe fails but the pipeline is otherwise fine", () => {
+    const h = derivePipelineHealth({
+      ...base,
+      s3Objects: null,
+    });
+    expect(h.status).toBe("ok");
+    expect(h.memory.status).toBe("ok");
   });
 
   it("warns when changefeed jobs exist but none are running", () => {

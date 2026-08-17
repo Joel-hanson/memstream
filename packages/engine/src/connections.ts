@@ -12,7 +12,7 @@ import {
 import { decryptSecret, encryptSecret } from "./secrets.js";
 import { sanitizeDatabaseUrlForStorage } from "./store-cockroach.js";
 
-/** Fixed workspace name for the judge / skip-Connect path. */
+/** Fixed workspace name for the demo / skip-Connect path. */
 export const DEMO_CONNECTION_NAME = "demo";
 
 function parseEnvFile(path: string): Record<string, string> {
@@ -269,7 +269,7 @@ export type EnsureDemoConnectionInput = {
 
 /**
  * Upsert the shared demo workspace (name=demo) and mark it active.
- * Does not run Configure/Enable — operator or judge continues from there.
+ * Does not run Configure/Enable — operator continues from there.
  */
 export async function ensureDemoConnection(
   input: EnsureDemoConnectionInput = {},

@@ -9,6 +9,7 @@ packages/*/dist
 .pnpm-store
 data
 .memstream-*.json
+.memstream-console
 .pytest_cache
 **/__pycache__
 **/*.pyc
@@ -16,4 +17,6 @@ data
 **/._*
 deploy-out
 *.tgz
+*.pem
+*.key
 .cursor

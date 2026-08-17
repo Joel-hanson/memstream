@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, expect, it } from "vitest";
 import { injectSqlPassword } from "../src/cockroach-cloud.js";
 
 describe("injectSqlPassword", () => {
@@ -9,9 +8,9 @@ describe("injectSqlPassword", () => {
       "s3cret!",
     );
     const u = new URL(out.replace(/^postgresql:/i, "http:"));
-    assert.equal(u.username, "user");
-    assert.equal(u.password, "s3cret!");
-    assert.equal(u.pathname, "/defaultdb");
+    expect(u.username).toBe("user");
+    expect(u.password).toBe("s3cret!");
+    expect(u.pathname).toBe("/defaultdb");
   });
 
   it("replaces placeholder password", () => {
@@ -20,6 +19,6 @@ describe("injectSqlPassword", () => {
       "real",
     );
     const u = new URL(out.replace(/^postgresql:/i, "http:"));
-    assert.equal(u.password, "real");
+    expect(u.password).toBe("real");
   });
 });

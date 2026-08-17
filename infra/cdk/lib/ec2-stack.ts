@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import type { Construct } from "constructs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +21,8 @@ export class MemstreamEc2Stack extends cdk.Stack {
 
     this.templateOptions.description =
       "Memstream demo box — EC2 (Caddy HTTPS + shop subdomain via sslip.io + S3 watcher), IAM instance role " +
-      "(S3 CDC + deploy package + Bedrock embeddings), security group. " +
+      "(S3 CDC + deploy package + Bedrock embeddings), dedicated CDC sink user/role for Cockroach changefeed " +
+      "(AssumeRole, no expiring session tokens), security group. " +
       "Cockroach Cloud and changefeed stay outside this stack.";
 
     const instanceType = new cdk.CfnParameter(this, "InstanceType", {
@@ -168,6 +170,94 @@ export class MemstreamEc2Stack extends cdk.Stack {
       ),
     });
 
+    const cdcSinkUser = new iam.CfnUser(this, "CdcSinkUser", {
+      tags: [{ key: "app", value: "memstream" }],
+    });
+
+    const cdcSinkRole = new iam.CfnRole(this, "CdcSinkRole", {
+      assumeRolePolicyDocument: {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: { AWS: cdcSinkUser.attrArn },
+            Action: "sts:AssumeRole",
+          },
+        ],
+      },
+      policies: [
+        {
+          policyName: "memstream-cdc-s3",
+          policyDocument: {
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "ListCdcBucket",
+                Effect: "Allow",
+                Action: ["s3:ListBucket", "s3:GetBucketLocation"],
+                Resource: cdk.Fn.sub("arn:aws:s3:::${CdcS3Bucket}"),
+              },
+              {
+                Sid: "WriteCdcPrefix",
+                Effect: "Allow",
+                Action: [
+                  "s3:PutObject",
+                  "s3:GetObject",
+                  "s3:AbortMultipartUpload",
+                ],
+                Resource: cdk.Fn.sub("arn:aws:s3:::${CdcS3Bucket}/${CdcS3Prefix}*"),
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    new iam.CfnUserPolicy(this, "CdcSinkUserS3", {
+      userName: cdcSinkUser.ref,
+      policyName: "memstream-cdc-s3",
+      policyDocument: {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "ListCdcBucket",
+            Effect: "Allow",
+            Action: ["s3:ListBucket", "s3:GetBucketLocation"],
+            Resource: cdk.Fn.sub("arn:aws:s3:::${CdcS3Bucket}"),
+          },
+          {
+            Sid: "WriteCdcPrefix",
+            Effect: "Allow",
+            Action: [
+              "s3:PutObject",
+              "s3:GetObject",
+              "s3:AbortMultipartUpload",
+            ],
+            Resource: cdk.Fn.sub("arn:aws:s3:::${CdcS3Bucket}/${CdcS3Prefix}*"),
+          },
+        ],
+      },
+    });
+
+    const cdcSinkAccessKey = new iam.CfnAccessKey(this, "CdcSinkAccessKey", {
+      userName: cdcSinkUser.ref,
+    });
+
+    const cdcSinkSecret = new secretsmanager.CfnSecret(this, "CdcSinkSecret", {
+      name: cdk.Fn.sub("memstream/${AWS::StackName}/cdc-sink"),
+      description:
+        "Long-lived IAM user keys for Cockroach changefeed S3 (no session token)",
+      secretString: cdk.Fn.join("", [
+        '{"MEMSTREAM_CDC_ACCESS_KEY_ID":"',
+        cdcSinkAccessKey.ref,
+        '","MEMSTREAM_CDC_SECRET_ACCESS_KEY":"',
+        cdcSinkAccessKey.attrSecretAccessKey,
+        '","MEMSTREAM_CDC_ROLE_ARN":"',
+        cdcSinkRole.attrArn,
+        '"}',
+      ]),
+    });
+
     const instanceRole = new iam.CfnRole(this, "InstanceRole", {
       assumeRolePolicyDocument: {
         Version: "2012-10-17",
@@ -305,6 +395,20 @@ export class MemstreamEc2Stack extends cdk.Stack {
                   ),
                 ),
               },
+              {
+                Sid: "ManageLambdaWorkerConfigSecret",
+                Effect: "Allow",
+                Action: [
+                  "secretsmanager:CreateSecret",
+                  "secretsmanager:PutSecretValue",
+                  "secretsmanager:GetSecretValue",
+                  "secretsmanager:DescribeSecret",
+                  "secretsmanager:TagResource",
+                ],
+                Resource: cdk.Fn.sub(
+                  "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:memstream/*",
+                ),
+              },
             ],
           },
         },
@@ -404,6 +508,15 @@ export class MemstreamEc2Stack extends cdk.Stack {
       value: cdk.Fn.sub(
         "aws ssm start-session --target ${DemoInstance} --region ${AWS::Region}",
       ),
+    });
+    new cdk.CfnOutput(this, "CdcSinkRoleArn", {
+      description:
+        "IAM role Cockroach assumes for S3 CDC (keys live in memstream/<stack>/cdc-sink)",
+      value: cdcSinkRole.attrArn,
+    });
+    new cdk.CfnOutput(this, "CdcSinkSecretArn", {
+      description: "Secrets Manager ARN for CDC sink user keys + role ARN",
+      value: cdcSinkSecret.ref,
     });
   }
 }

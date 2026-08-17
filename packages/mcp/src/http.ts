@@ -100,15 +100,15 @@ function rejectHost(request: Request): Response | null {
 /**
  * Handle one MCP HTTP request (Web Standards) — for Next.js Route Handlers.
  * Stateless: one server + transport per request.
+ *
+ * Do not apply the standalone DNS-rebinding Host allowlist here. Next listens on
+ * localhost behind Caddy; the public Host is the sslip.io name Cursor sends.
  */
 export async function handleMcpFetchRequest(
   request: Request,
   embedderOrCtx: Embedder | McpServerContext,
   store?: MemoryStore,
 ): Promise<Response> {
-  const blocked = rejectHost(request);
-  if (blocked) return blocked;
-
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders(request) });
   }

@@ -4,6 +4,7 @@ import {
   cancelActiveChangefeedJobs,
   isSafeSqlIdent,
   parseChangefeedTables,
+  resolveCdcSinkAuth,
 } from "../src/changefeed.js";
 
 describe("changefeed identifiers", () => {
@@ -89,4 +90,62 @@ describe("buildS3Uri", () => {
     expect(uri).toContain("ASSUME_ROLE=");
     expect(uri).not.toContain("AWS_ACCESS_KEY_ID");
   });
+
+  it("uses specified keys + ASSUME_ROLE without session token when both passed to URI builder", () => {
+    const uri = buildS3Uri("b", "cdc/", {
+      region: "us-east-1",
+      roleArn: "arn:aws:iam::123:role/cdc",
+      accessKey: "AKIAEXAMPLE",
+      secretKey: "secret",
+      sessionToken: "should-not-appear",
+    });
+    expect(uri).toContain("ASSUME_ROLE=");
+    expect(uri).toContain("AWS_ACCESS_KEY_ID=AKIAEXAMPLE");
+    expect(uri).not.toContain("AUTH=implicit");
+    expect(uri).not.toContain("AWS_SESSION_TOKEN");
+  });
+
+  it("rejects session tokens when no assume-role sink", () => {
+    expect(() =>
+      buildS3Uri("b", "cdc/", {
+        region: "us-east-1",
+        accessKey: "ASIAEXAMPLE",
+        secretKey: "secret",
+        sessionToken: "tok",
+      }),
+    ).toThrow(/session tokens expire/);
+  });
 });
+
+describe("resolveCdcSinkAuth", () => {
+  it("uses dedicated CDC keys and ignores role ARN (Cockroach Cloud STS region bug)", async () => {
+    const prev = {
+      ak: process.env.MEMSTREAM_CDC_ACCESS_KEY_ID,
+      sk: process.env.MEMSTREAM_CDC_SECRET_ACCESS_KEY,
+      role: process.env.MEMSTREAM_CDC_ROLE_ARN,
+      session: process.env.AWS_SESSION_TOKEN,
+    };
+    process.env.MEMSTREAM_CDC_ACCESS_KEY_ID = "AKIACDC";
+    process.env.MEMSTREAM_CDC_SECRET_ACCESS_KEY = "cdcsecret";
+    process.env.MEMSTREAM_CDC_ROLE_ARN = "arn:aws:iam::1:role/cdc";
+    process.env.AWS_SESSION_TOKEN = "expired-sso";
+    try {
+      const auth = await resolveCdcSinkAuth({});
+      expect(auth).toEqual({
+        accessKey: "AKIACDC",
+        secretKey: "cdcsecret",
+      });
+      expect(auth.roleArn).toBeUndefined();
+    } finally {
+      restoreEnv("MEMSTREAM_CDC_ACCESS_KEY_ID", prev.ak);
+      restoreEnv("MEMSTREAM_CDC_SECRET_ACCESS_KEY", prev.sk);
+      restoreEnv("MEMSTREAM_CDC_ROLE_ARN", prev.role);
+      restoreEnv("AWS_SESSION_TOKEN", prev.session);
+    }
+  });
+});
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}

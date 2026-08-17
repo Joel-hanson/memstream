@@ -1,41 +1,69 @@
-# AWS for Memstream
+# Memstream deploy and operate
 
-One path: AWS account → Cockroach DBs → Enable changefeed → run the worker.
+AWS setup, self-host, and the EC2 demo box.
 
-Cockroach: platform URL in `.env` (`MEMSTREAM_DATABASE_URL`), application URL in Connect.  
-Video / MCP ask: [DEMO_SCRIPT.md](DEMO_SCRIPT.md). Overview: [README](../README.md).  
-Self-host (same packages, your control plane): [SELF_HOST.md](SELF_HOST.md).
+Overview: [README](../README.md). Architecture: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
-## Steps
+## Paths
 
-### 1. AWS account + IAM
+| Path | Use when | What you run |
+| --- | --- | --- |
+| Managed Lambda | Default for cloud | Console, application DB, S3, Lambda worker |
+| Laptop worker | Debugging | Console locally, worker via `make watch-cloud` |
+| EC2 demo box | Short-lived demo or single-box self-host | Console, shop, and optional worker on one EC2 instance |
 
-1. Create an account at [aws.amazon.com](https://aws.amazon.com/) (payment method required).
-2. MFA on root. Create IAM user `memstream-dev` (not root for daily work).
-3. Attach `AmazonS3FullAccess` + `AmazonBedrockFullAccess` (or tighter S3 + `bedrock:InvokeModel`).
-4. Create CLI access key. Copy the secret once.
-5. If `make deploy-aws` is denied, attach the deployer **customer managed** policy (do not use inline `put-user-policy` — that cap is 2048 bytes total; this doc is larger):
+The sequence is the same for all of them:
+
+1. Create or reuse an AWS account.
+2. Create an S3 bucket for Cockroach changefeed output.
+3. Configure `.env`.
+4. Create the Memstream platform DB and Cockroach CA.
+5. Run the console and click Connect, Configure, Enable.
+6. Run exactly one worker for that bucket/prefix.
+
+---
+
+## 1. AWS account and IAM
+
+1. Create an account at [aws.amazon.com](https://aws.amazon.com/).
+2. Turn on MFA for the root user.
+3. Create a daily-use IAM user such as `memstream-dev`.
+4. Attach:
+   - `AmazonS3FullAccess` or a tighter bucket policy
+   - `AmazonBedrockFullAccess` or at least `bedrock:InvokeModel`
+5. Create a CLI access key and save the secret once.
+
+If deploy or Enable needs more permissions, render the managed deployer policy:
 
 ```bash
 # needs CDC_S3_BUCKET in .env
 MEMSTREAM_ATTACH_DEPLOYER_POLICY=1 bash scripts/render-deployer-policy.sh
 ```
 
-Or render only (`bash scripts/render-deployer-policy.sh`) and follow the printed `create-policy` / `attach-user-policy` commands. Template: `infra/deployer-policy.json.template` (S3 scoped to `${CDC_S3_BUCKET}`).
+That renders from `infra/deployer-policy.json.template`. The rendered `infra/deployer-policy.json` is local and gitignored because it includes your bucket name.
 
-**Secrets:** deploy stores DB URLs / AES key in Secrets Manager (`memstream/<stack>/config`). CloudFormation only gets `ConfigSecretArn`. Re-run attach after pulling if Secrets Manager / SSM Session / CloudWatch Logs permissions were added (`make logs` needs `ssm:StartSession` + `logs:FilterLogEvents`).
+Secrets go to Secrets Manager under `memstream/<stack>/config`. CloudFormation gets only the secret ARN.
 
-**Infra (CDK):** edit TypeScript under `infra/cdk/`, then `make synth-infra` (writes `infra/ec2.yaml` + `infra/lambda.yaml`). Deploy/Enable still use those generated templates via CloudFormation — you do not need `cdk deploy` for the demo path.
-### 2. CLI
+If you edit infra, change TypeScript in `infra/cdk/` and run:
 
 ```bash
-aws configure          # region us-east-1, output json
+make synth-infra
+```
+
+That writes `infra/ec2.yaml` and `infra/lambda.yaml`, which are the templates used by deploy and Enable.
+
+---
+
+## 2. AWS CLI and bucket
+
+```bash
+aws configure
 aws sts get-caller-identity
 ```
 
-### 3. S3 bucket
+Create a bucket for changefeed objects:
 
 ```bash
 export AWS_REGION=us-east-1
@@ -43,11 +71,13 @@ export CDC_S3_BUCKET=memstream-cdc-<yourname>-<random>
 aws s3 mb "s3://${CDC_S3_BUCKET}" --region "$AWS_REGION"
 ```
 
-Same name goes in `.env` as `CDC_S3_BUCKET`.
+Set AWS Billing budget alerts at `$5` and `$10` if you want a spend cap.
 
-### 4. Bedrock smoke test
+---
 
-Titan Embed V2 is on by default (no model-access page). Model: `amazon.titan-embed-text-v2:0`.
+## 3. Bedrock smoke test
+
+Titan Embed V2 is the default model:
 
 ```bash
 aws bedrock-runtime invoke-model \
@@ -59,28 +89,22 @@ aws bedrock-runtime invoke-model \
   /tmp/bedrock-out.json
 ```
 
-Access denied → IAM or wrong region.
+If this fails with `AccessDenied`, fix IAM or region before continuing.
 
-### 5. Budget
+---
 
-Billing → Budgets → alert at $5 and $10. Skip Knowledge Bases / OpenSearch.
-
-### 6. `.env`
+## 4. Platform config
 
 ```bash
 cp .env.example .env
 ```
 
-Quote Cockroach URLs (`&` breaks unquoted `source .env`):
+Minimum:
 
 ```bash
 CLUSTER_URL='postgresql://.../defaultdb?sslmode=verify-full'
-COCKROACH_CLUSTER_ID=…          # Cloud Overview → make cockroach-ca
+COCKROACH_CLUSTER_ID=...
 MEMSTREAM_SECRETS_KEY=$(openssl rand -hex 32)
-# Optional console lock (no login UI — same token for server + browser):
-# MEMSTREAM_CONSOLE_TOKEN=$(openssl rand -hex 24)
-# NEXT_PUBLIC_MEMSTREAM_CONSOLE_TOKEN=$MEMSTREAM_CONSOLE_TOKEN
-# Restart `make web` after changing these (make web now loads root .env).
 CDC_S3_BUCKET=memstream-cdc-yourname
 CDC_S3_PREFIX=cdc/
 AWS_REGION=us-east-1
@@ -88,146 +112,168 @@ BEDROCK_EMBED_MODEL=amazon.titan-embed-text-v2:0
 MEMSTREAM_EMBEDDER=bedrock
 MEMSTREAM_STORE=cockroach
 MEMSTREAM_SOURCE=s3
-MEMSTREAM_WORKER_COMPUTE=lambda   # default; ec2 for self-host / demo box
-# Optional keyless CDC sink (AUTH=implicit + ASSUME_ROLE):
-# MEMSTREAM_CDC_ROLE_ARN=arn:aws:iam::ACCOUNT:role/memstream-cdc
+MEMSTREAM_WORKER_COMPUTE=lambda   # or ec2 for demo / self-host box
 ```
 
-AWS keys: `aws configure` → `~/.aws/credentials` is enough (no keys in `.env`).
-Connect URLs should use `sslmode=verify-full` **without** `sslrootcert=` — CA comes from `PGSSLROOTCERT` / `~/.postgresql/root.crt`.
-### 7. Databases + CA (run before the app / deploy)
+Optional extra lock for a shared box:
 
 ```bash
-make setup-db          # platform only: memstream DB + sql/memstream.sql + profile seed
-make cockroach-ca      # needs COCKROACH_CLUSTER_ID → ~/.postgresql/root.crt
+MEMSTREAM_CONSOLE_TOKEN=$(openssl rand -hex 24)
+NEXT_PUBLIC_MEMSTREAM_CONSOLE_TOKEN=$MEMSTREAM_CONSOLE_TOKEN
 ```
 
-1. Put the printed **memstream** URL in `.env` as `MEMSTREAM_DATABASE_URL`.
-2. Set `MEMSTREAM_SECRETS_KEY` (`openssl rand -hex 32`) before Connect saves.
-3. CA via `make cockroach-ca` (or download to `~/.postgresql/root.crt`).
+Do not reuse `MEMSTREAM_SECRETS_KEY` as a browser token. Keep AWS credentials in `~/.aws/credentials`, not in `.env`.
 
-**Application schema** (shop tables + `agent_memory_chunks` vector memory) is **not** part of `setup-db`. Connect → **Enable** applies `sql/application.sql` on the Connect URL (with VECTOR INDEX retry if needed).
-### 8. Connect → Enable
+Cockroach URLs should use `sslmode=verify-full` without `sslrootcert=`. The CA comes from `PGSSLROOTCERT` or `~/.postgresql/root.crt`.
+
+---
+
+## 5. Create the databases
 
 ```bash
+make setup-db
+make cockroach-ca
+```
+
+Then:
+
+1. Put the printed memstream URL into `.env` as `MEMSTREAM_DATABASE_URL`.
+2. Keep your application DB URL for the console Connect step.
+3. Confirm `MEMSTREAM_SECRETS_KEY` is set before Connect stores anything.
+
+`make setup-db` creates only the platform DB. Application tables and `agent_memory_chunks` are applied when you click Enable on the application connection.
+
+---
+
+## 6. Run the control plane
+
+Local console:
+
+```bash
+make install-js
 make web
 ```
 
-1. **Connect** — paste the printed **application** URL.
-2. **Configure** — profile `commerce`.
-3. **Enable** — creates changefeed → S3 (`orders`, `stock`, `tickets`).
+Optional demo shop:
 
-Verify: `aws s3 ls "s3://${CDC_S3_BUCKET}/cdc/" --recursive` after a shop write.
+```bash
+make shop
+```
 
-### 9. Run the worker
+In the browser:
 
-**A — laptop** (debug):
+1. Connect with the application DB URL.
+2. Configure a profile such as `commerce`.
+3. Enable to create schema, changefeed, and the selected worker path.
+
+Health probe:
+
+```bash
+curl -s http://localhost:3000/api/health
+```
+
+---
+
+## 7. Worker options
+
+Run only one consumer per bucket/prefix.
+
+### A. Managed Lambda
+
+Default for cloud. Leave Start managed cloud worker on in Enable, or set `MEMSTREAM_WORKER_COMPUTE=lambda` in `.env`. Enable deploys the `*-lambda` stack and wires S3 to Lambda.
+
+Logs:
+
+```bash
+make logs
+# or
+make logs LOGS=lambda
+```
+
+### B. Laptop worker
 
 ```bash
 make watch-cloud
-# shop: http://127.0.0.1:3000/shop
 ```
 
-**B — Managed Lambda** (default cloud worker):
+Turn off the managed worker in Enable if you use this path.
 
-In Enable, leave **Start managed cloud worker** on (Advanced → Worker compute =
-Managed Lambda). Or set `MEMSTREAM_WORKER_COMPUTE=lambda` in `.env`.
-
-**C — EC2** (demo box / self-host):
+### C. EC2 demo / self-host box
 
 ```bash
-make deploy-aws
-# requires Docker (Colima/OrbStack/Desktop) — builds Next standalone locally; EC2 only unpacks + runs
-# Apple Silicon / Colima defaults to linux/arm64 + t4g.micro (qemu amd64 next build SIGSEGVs)
-# wait until the script prints "Shop is up" (~1–2 min after stack create)
-# optional: SHOP_CIDR=YOUR_PUBLIC_IP/32 to lock the SG to your IP
-# shell: aws ssm start-session (no SSH ingress)
+MEMSTREAM_WORKER_COMPUTE=ec2 make deploy-aws
 ```
 
-Or in Enable → Advanced pick **EC2 (self-host / demo)** with the cloud worker on.
-Set `MEMSTREAM_WORKER_COMPUTE=ec2` if you want that default.
-
-Do not run EC2 `memstream-watch` and Lambda on the same bucket/prefix.
-
-### 10. Tear down
+- Requires Docker locally to build the standalone app artifact.
+- Wait for the script to print `Shop is up`.
+- Optional: `SHOP_CIDR=YOUR_PUBLIC_IP/32` to limit public access.
+- Shell access is through SSM, not SSH.
 
 ```bash
-make destroy-aws    # EC2 stack only
+aws ssm start-session
 ```
 
-Lambda: delete the run in the console, or delete `${STACK_NAME}-lambda` in CloudFormation. S3 + Cockroach stay.
+The EC2 path can run console, shop, and optionally `memstream-watch` on the instance. Do not run that worker and Lambda against the same CDC prefix at the same time.
 
 ---
 
-## Cheat sheet
+## 8. Self-host notes
 
-| | |
-| --- | --- |
-| Stack name | `memstream-demo` (EC2) / `memstream-demo-lambda` |
-| Shop CIDR | `SHOP_CIDR` (default `0.0.0.0/0` — tighten to your IP/`32`) |
-| Instance | `INSTANCE_TYPE=t3.micro` |
-| Update EC2 code | `make destroy-aws && make deploy-aws` |
-| Combined logs | `make logs` (Lambda CloudWatch + EC2 journal in one terminal) |
-| EC2 only | `make logs LOGS=ec2` or SSM → `sudo journalctl -u memstream-shop -u memstream-watch -f` |
-| Lambda only | `make logs LOGS=lambda` or `aws logs tail /aws/lambda/memstream-demo-lambda-worker --follow` |
-| CDC without long-lived keys | `MEMSTREAM_CDC_ROLE_ARN` + trust Cockroach Cloud identity (AUTH=implicit) |
+Self-host uses the same packages:
 
-Stacks do **not** create the Cockroach cluster, changefeed, or public MCP.
+- `apps/web` for the console and APIs
+- `packages/engine` for changefeed, indexing, deploy, and worker logic
+- `packages/mcp` for `search_memory`
 
----
+You operate the platform DB (`MEMSTREAM_DATABASE_URL`), the console host, one worker path, and your AWS account and bucket.
 
-## Changefeed S3 auth
+Application tables and `agent_memory_chunks` still live in the customer application database.
 
-Changefeed runs **inside Cockroach Cloud**, not on your EC2/Lambda role.
-
-- **Default:** Enable embeds AWS credentials from your laptop provider chain into `CREATE EXTERNAL CONNECTION` (often temporary STS keys). Prefer not committing long-lived keys.
-- **Better (Cockroach Cloud Advanced):** create an IAM role your cluster can assume, set `MEMSTREAM_CDC_ROLE_ARN`, and trust Cockroach’s managed identity — sink URI uses `AUTH=implicit&ASSUME_ROLE=…` with no access keys. See [Cloud Storage Authentication](https://www.cockroachlabs.com/docs/stable/cloud-storage-authentication).
-
-**Manual SQL (keys):**
-
-```sql
-CREATE EXTERNAL CONNECTION memstream_s3 AS
-  's3://YOUR_BUCKET/cdc?AWS_ACCESS_KEY_ID=...&AWS_SECRET_ACCESS_KEY=...&AWS_REGION=us-east-1';
-CREATE CHANGEFEED FOR TABLE orders, stock, tickets
-  INTO 'external://memstream_s3' WITH updated, diff, format = json;
-```
-
-**Manual SQL (assume role):**
-
-```sql
-CREATE EXTERNAL CONNECTION memstream_s3 AS
-  's3://YOUR_BUCKET/cdc?AUTH=implicit&ASSUME_ROLE=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fmemstream-cdc&AWS_REGION=us-east-1';
-```
+Short version: [SELF_HOST.md](SELF_HOST.md).
 
 ---
 
-## Alternatives (optional)
+## 9. Changefeed S3 auth
 
-**Changefeed CLI** (needs `DATABASE_URL` in the shell):
+The changefeed runs inside Cockroach Cloud, not on your laptop, EC2 role, or Lambda role.
 
-```bash
-set -a && source .env && set +a
-make changefeed-dry && make changefeed
-# full demo tables: MEMSTREAM_CHANGEFEED_TABLES=orders,stock,tickets
-```
+On the default path, deploy creates a dedicated IAM user with long-lived S3 credentials scoped to `${CDC_S3_PREFIX}`. Enable stores those credentials in `CREATE EXTERNAL CONNECTION`. Re-run Enable after deploy so the external connection is recreated with the fresh sink credentials.
+
+Do not Enable from a laptop that only has `aws sso login` or `AWS_SESSION_TOKEN`. Those temporary session tokens are not used for the Cockroach sink.
+
+For Cockroach Cloud setups that trust the cluster identity on a role, set `MEMSTREAM_CDC_ROLE_ARN` to use `AUTH=implicit&ASSUME_ROLE=...`.
+
+Reference: [Cloud Storage Authentication](https://www.cockroachlabs.com/docs/stable/cloud-storage-authentication).
 
 ---
 
-## Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `Unable to locate credentials` | `aws configure` |
-| Bedrock `AccessDeniedException` | IAM `bedrock:InvokeModel` / region |
-| `NoSuchBucket` | Bucket name vs `AWS_REGION` |
-| Cockroach SSL / auth | `PGSSLROOTCERT` / `make cockroach-ca`; URL `sslmode=verify-full` |
-| `MEMSTREAM_SECRETS_KEY required` | `openssl rand -hex 32` in `.env`, then redeploy (`UserData` only runs on new instances) |
-| Enable on EC2: `Missing template …/infra/ec2.yaml` | EC2 redeploy is skipped on prebuilt; for Lambda, redeploy so the artifact includes `infra/lambda.yaml` + `deploy/memstream-lambda.zip`. From a laptop: `make synth-infra` if YAML is missing. |
-| Edit EC2/Lambda infra | Change `infra/cdk/` (TypeScript), run `make synth-infra`, then deploy/Enable |
-| Enable on EC2: `s3:PutObject` AccessDenied | InstanceRole needs write on `${CDC_S3_PREFIX}*` — update stack (`make deploy-aws`); IAM applies without replace |
-| ShopUrl / ConsoleUrl unreachable | Wait for userdata + Let's Encrypt (~2–4 min); open `https://…sslip.io` (not raw `:8080`); confirm `SHOP_CIDR` includes your IP; check `journalctl -u caddy` |
-| No S3 objects | Changefeed job; sink IAM / `MEMSTREAM_CDC_ROLE_ARN`; table names |
-| Chunks empty | Profile rules; `diff`; cursor skipping keys |
-| Control plane probe | `curl -s http://localhost:3000/api/health` — expects `platform_db` healthy |
+| `Unable to locate credentials` | `aws configure` and `aws sts get-caller-identity` |
+| Bedrock `AccessDeniedException` | IAM `bedrock:InvokeModel` and region |
+| `NoSuchBucket` | Bucket name and `AWS_REGION` |
+| Cockroach SSL or auth error | `make cockroach-ca`, `PGSSLROOTCERT`, `sslmode=verify-full` |
+| `MEMSTREAM_SECRETS_KEY required` | Add it to `.env`, then redeploy the EC2 box |
+| Missing `infra/ec2.yaml` or `infra/lambda.yaml` | Run `make synth-infra` |
+| EC2 `s3:PutObject` denied | Update the EC2 stack so the instance role gets the latest S3 permissions |
+| Changefeed `ExpiredToken` | Re-enable with the dedicated sink credentials, not SSO session creds |
+| Lambda Secrets Manager denied | Update the stack so the execution role can create or read `memstream/*` secrets |
+| `ShopUrl` or `ConsoleUrl` unreachable | Wait for userdata and TLS, confirm `SHOP_CIDR`, check `journalctl -u caddy` |
+| No S3 objects | Check the changefeed job, sink auth, bucket prefix, and watched tables |
+| Live chunks empty | Check profile rules, source rows, and worker logs |
 
 Do not commit `.env` or paste secrets into chat.
+
+---
+
+## 11. Tear down
+
+```bash
+make destroy-aws
+```
+
+That destroys the EC2 demo stack only.
+
+For Lambda, delete the run in the console or remove the `*-lambda` CloudFormation stack. S3 and Cockroach remain until you remove them yourself.

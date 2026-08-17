@@ -1,99 +1,113 @@
 # Memstream
 
-Turn CockroachDB writes into searchable agent memory, in the same database.
+Turn CockroachDB writes into searchable agent memory, stored in the same database as your app.
 
-If your application uses CockroachDB, that structured data is already there. Cockroach MCP can query the live tables. What an agent still does not have is meaning: what a row actually meant, and what happened over time. Getting that from SQL takes several lookups, and you still do not have a sentence you can search later.
+Your app already writes rows to CockroachDB. An agent can query those tables with SQL or Cockroach MCP, but it still has to stitch several lookups together to understand what happened over time. Memstream watches table changes, turns selected columns into plain sentences, embeds them with AWS Bedrock, and stores the vectors back in CockroachDB next to your app tables. There is no separate vector database.
 
-Memstream watches the writes (changefeeds), turns selected columns into plain-language memory, embeds them on AWS with Bedrock, and stores the vectors back in the same Cockroach database, next to the app tables. No separate vector database. As the app keeps writing, memory grows with it.
+## How it works
 
-## Prerequisites
-
-| | Local | AWS / cloud |
-| --- | --- | --- |
-| Node.js 20+ and npm | yes | yes |
-| CockroachDB Cloud | no | yes |
-| AWS (S3 + Bedrock) | no | yes |
-
-```bash
-node -v   # v20+
+```text
+App writes rows
+    -> CockroachDB (your tables)
+    -> changefeed copies changes to S3
+    -> worker (Lambda, EC2, or your laptop) reads S3
+    -> Bedrock turns text into embeddings
+    -> vectors saved in agent_memory_chunks (same CockroachDB)
+    -> agent searches memory via MCP
 ```
 
-## 1. Local (no accounts)
+Memory lives in `agent_memory_chunks` in your application database (`sql/application.sql`). The Memstream console is the control plane: connect your DB, choose a profile, enable the pipeline, and watch memory land live.
+
+Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Deploy and operate: [docs/AWS.md](docs/AWS.md).
+
+## What you need
+
+| Thing | Why |
+| --- | --- |
+| Node.js 20+ | Run the console and scripts |
+| CockroachDB cluster | Application data and memory chunks |
+| AWS account | S3 for changefeed objects, Bedrock for embeddings, optional Lambda or EC2 worker |
+
+## Quick start
+
+### Local UI only
+
+Console and demo shop, no Cockroach or AWS:
 
 ```bash
 make install-js
-make web           # http://127.0.0.1:3000  console
-make shop          # http://127.0.0.1:3001  example Acme shop (customer app)
-```
-
-No `.env` needed. Shop is in-memory; console Connect/Enable need a DB (next section).
-
-## 2. AWS / cloud
-
-Full checklist: **[docs/AWS.md](docs/AWS.md)**. Short version:
-
-```bash
-# a. AWS once — IAM, aws configure, S3 bucket, Bedrock test, budget
-#    see docs/AWS.md §1–5
-
-cp .env.example .env
-# Set (quote Cockroach URLs — & breaks unquoted source):
-#   CLUSTER_URL='postgresql://.../defaultdb?sslmode=verify-full'
-#   CDC_S3_BUCKET=...
-#   AWS_REGION=us-east-1
-#   MEMSTREAM_WORKER_COMPUTE=lambda   # default; ec2 for self-host / demo box
-
-make setup-db
-# Paste printed memstream URL → MEMSTREAM_DATABASE_URL in .env
-# MEMSTREAM_SECRETS_KEY=$(openssl rand -hex 32)
-# COCKROACH_CLUSTER_ID=… && make cockroach-ca
-
 make web
-# Connect — paste printed application URL
-# Configure — profile commerce
-# Enable — changefeed → S3; leave “Start managed cloud worker” on for Lambda
-
-# Worker — pick one (do not run two consumers on the same bucket/prefix):
-#   A  Enable with Managed Lambda (default) — no extra make target
-#   B  make watch-cloud     # laptop polls S3 (turn cloud worker off in Enable)
-#   C  make deploy-aws      # EC2 demo box (Docker required; optional SHOP_CIDR=YOUR_IP/32)
-
-make destroy-aws     # EC2 stack only
-# Lambda: delete the run in the console, or delete *-lambda in CloudFormation
+make shop
 ```
 
-Video + MCP ask: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) (`make demo-reset` between takes).  
-Self-host runbook: [docs/SELF_HOST.md](docs/SELF_HOST.md).
+- Console: `http://127.0.0.1:3000`
+- Shop: `http://127.0.0.1:3001`
+
+Connect and Enable still need a real CockroachDB and AWS setup.
+
+### Real pipeline
+
+1. Copy `.env.example` to `.env`.
+2. Set up AWS, an S3 bucket, and Bedrock access.
+3. Run `make setup-db` and `make cockroach-ca`.
+4. Start the console with `make web`.
+5. In the browser: Connect, Configure, Enable.
+6. Run one worker: Managed Lambda, `make watch-cloud`, or `make deploy-aws`.
+
+Details: [docs/AWS.md](docs/AWS.md).
+
+## Worker options
+
+| Path | Use when | Notes |
+| --- | --- | --- |
+| Managed Lambda | Default for cloud | Leave the managed worker on in Enable |
+| Laptop worker | Debugging | `make watch-cloud` |
+| EC2 demo box | Demo or simple self-host | `make deploy-aws` |
+
+Do not run two workers against the same CDC bucket and prefix.
+
+## MCP
+
+Memstream exposes `search_memory` over MCP. With the console running, use Copy Memstream MCP from Live, or run:
 
 ```bash
-make help
+make mcp
 ```
 
-## Make targets
+Demo flow with Cockroach MCP next to Memstream MCP: [docs/AWS.md](docs/AWS.md#7-worker-options).
+
+## Common commands
 
 | Target | What |
 | --- | --- |
-| `install-js` | npm workspaces |
-| `cockroach-ca` | Download Cockroach Cloud CA → `~/.postgresql/root.crt` |
-| `demo-local` | Offline indexer |
-| `web` | Console + shop `:3000` |
-| `setup-db` | Create `memstream` (+ empty `application`) + platform SQL; app schema via Enable |
-| `watch-cloud` | S3 → Bedrock → Cockroach (laptop) |
-| `deploy-aws` / `destroy-aws` | EC2 demo stack (Lambda via Enable, not these targets) |
-| `synth-infra` | CDK → `infra/ec2.yaml` + `infra/lambda.yaml` |
-| `demo-reset` | Full reset to demo start (shop + platform clutter + S3 CDC prefix + cancel changefeed jobs) |
-| `demo-reset-shop` | Shop + memory only (narrow) |
-| `mcp` | Memstream MCP |
-| `test-engine` | vitest |
+| `install-js` | Install npm workspaces |
+| `web` | Run the Memstream console |
+| `shop` | Run the example Acme shop |
+| `setup-db` | Create the platform DB and apply `sql/memstream.sql` |
+| `cockroach-ca` | Download the Cockroach Cloud CA |
+| `watch-cloud` | Run the laptop worker |
+| `deploy-aws` / `destroy-aws` | Create or remove the EC2 demo stack |
+| `synth-infra` | Generate `infra/ec2.yaml` and `infra/lambda.yaml` |
+| `demo-reset` | Reset shop, memory, S3 prefix, and changefeed |
+| `mcp` | Run the Memstream MCP server |
 
-## Layout
+Run `make help` for the full list.
 
+## Repository layout
+
+```text
+apps/web/         Memstream console and APIs
+examples/shop/    Example customer app
+packages/engine/  Worker, CDC, deploy, and indexing logic
+packages/mcp/     Memstream MCP server
+profiles/ sql/ docs/ examples/ scripts/ infra/
 ```
-apps/web/         Memstream console
-examples/shop/    Example customer app (Acme Supply)
-packages/engine/  worker, CDC, shop libs
-packages/mcp/     Memstream MCP (search_memory + profile suggest)
-profiles/ sql/ docs/ examples/ scripts/ infra/cdk/ infra/
-```
 
-Design notes: [PLAN.md](PLAN.md). Target architecture: [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md) · [architecture diagram](docs/architecture-diagram.png). Self-host: [docs/SELF_HOST.md](docs/SELF_HOST.md).
+## Docs
+
+| Doc | What it covers |
+| --- | --- |
+| [docs/AWS.md](docs/AWS.md) | Deploy, operate, and self-host |
+| [docs/SELF_HOST.md](docs/SELF_HOST.md) | Short self-host notes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Product model and topology |
+| [docs/AWS.md](docs/AWS.md) | Deploy, operate, self-host, and demo walkthrough |

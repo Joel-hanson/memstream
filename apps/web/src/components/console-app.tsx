@@ -115,7 +115,9 @@ export function ConsoleApp() {
     setConnect((c) => ({ ...c, ...patch }));
 
   const credentialsSet =
-    hasStoredUrl || isUsableDatabaseUrl(connect.database_url);
+    hasStoredUrl ||
+    Boolean(connectionId) ||
+    isUsableDatabaseUrl(connect.database_url);
   const bucketSet = connect.bucket.trim().length >= 3;
   const canEnable = credentialsSet && Boolean(profilePath) && bucketSet;
   const profileLabel =
@@ -366,21 +368,25 @@ export function ConsoleApp() {
   }, [connect, credentialsSet, profilePath, tables, stackName, connectionId]);
 
   useEffect(() => {
-    if (!watching || !credentialsSet) return;
-    if (watchRef.current) return;
+    if (booting || !credentialsSet) return;
     void refreshPipeline();
-    watchRef.current = setInterval(() => {
+  }, [booting, credentialsSet, refreshPipeline]);
+
+  useEffect(() => {
+    if (!watching || !credentialsSet || booting) return;
+    const id = setInterval(() => {
       void refreshPipeline();
     }, 4000);
-  }, [watching, credentialsSet, refreshPipeline]);
+    watchRef.current = id;
+    return () => {
+      clearInterval(id);
+      if (watchRef.current === id) watchRef.current = null;
+    };
+  }, [watching, credentialsSet, booting, refreshPipeline]);
 
   const startWatch = useCallback(() => {
     setWatching(true);
     void refreshPipeline();
-    if (watchRef.current) clearInterval(watchRef.current);
-    watchRef.current = setInterval(() => {
-      void refreshPipeline();
-    }, 4000);
   }, [refreshPipeline]);
 
   const pollJob = useCallback(

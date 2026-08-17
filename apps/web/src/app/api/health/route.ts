@@ -17,6 +17,15 @@ type HealthCheck = {
   error?: string;
 };
 
+function publicCheckError(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  if (process.env.NODE_ENV === "production") {
+    console.error("[health]", detail);
+    return "unreachable";
+  }
+  return detail;
+}
+
 async function checkDatabase(root: string): Promise<HealthCheck> {
   const start = Date.now();
   const url = memstreamDatabaseUrl(root);
@@ -41,7 +50,7 @@ async function checkDatabase(root: string): Promise<HealthCheck> {
       name: "platform_db",
       status: "unhealthy",
       latency_ms: Date.now() - start,
-      error: err instanceof Error ? err.message : String(err),
+      error: publicCheckError(err),
     };
   }
 }
@@ -67,7 +76,7 @@ async function checkS3(): Promise<HealthCheck> {
       name: "s3",
       status: "degraded",
       latency_ms: Date.now() - start,
-      error: err instanceof Error ? err.message : String(err),
+      error: publicCheckError(err),
     };
   }
 }

@@ -40,9 +40,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Building ${PLATFORM} prebuilt image (on your machine, not EC2)…" >&2
+BUILD_ID="${MEMSTREAM_BUILD_ID:-$(git rev-parse --short HEAD 2>/dev/null || echo local)-cdc-s3-keys-v1}"
+echo "Building ${PLATFORM} prebuilt image (on your machine, not EC2) build_id=${BUILD_ID}…" >&2
 docker build \
   --platform "$PLATFORM" \
+  --build-arg "MEMSTREAM_BUILD_ID=${BUILD_ID}" \
   -f Dockerfile.deploy \
   --target build \
   -t "$IMAGE" \

@@ -494,9 +494,11 @@ export async function buildPipelineStatus(options: {
 
   if (databaseUrl) {
     try {
-      mem = await memoryMetrics(databaseUrl, resolvedConnectionId);
+      mem = await memoryMetrics(databaseUrl, null);
       feeds = await changefeedMetrics(databaseUrl);
-      recent = await listRecentChunks(databaseUrl, 25, resolvedConnectionId);
+      // Live is scoped to the application DB. Don't hide Lambda/EC2 chunks
+      // that were written under a different (or null) connection_id.
+      recent = await listRecentChunks(databaseUrl, 25, null);
       dbOk = true;
     } catch (err) {
       dbError = err instanceof Error ? err.message : String(err);

@@ -56,7 +56,7 @@ async function getRuntime(): Promise<Runtime> {
         profile,
         { region },
       );
-      let connectionId = process.env.MEMSTREAM_CONNECTION_ID || null;
+      let connectionId = process.env.MEMSTREAM_CONNECTION_ID?.trim() || null;
       let databaseUrl = process.env.DATABASE_URL?.trim() || "";
       if (!databaseUrl || !connectionId) {
         try {

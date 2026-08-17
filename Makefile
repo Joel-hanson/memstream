@@ -18,7 +18,7 @@ help:
 	@echo "    make setup-db       Create memstream + application DBs + SQL"
 	@echo "    make web            Connect → Configure → Enable (changefeed)"
 	@echo "    make watch-cloud    Mode A: S3→Bedrock worker on your laptop"
-	@echo "    make deploy-aws     Mode B: EC2 console :80 + shop :8080 (see docs/AWS.md)"
+	@echo "    make deploy-aws     Mode B: EC2 demo box (Caddy HTTPS via sslip.io; see docs/AWS.md)"
 	@echo "    make destroy-aws    Tear down the EC2 stack"
 	@echo "    make logs           Tail Lambda + EC2 logs in one terminal"
 	@echo "    make synth-infra    CDK → infra/ec2.yaml + infra/lambda.yaml"
@@ -28,7 +28,7 @@ help:
 	@echo "    make demo-reset     Full reset to demo start (shop + platform clutter)"
 	@echo "    make demo-reset-shop  Shop + memory only (narrow)"
 	@echo ""
-	@echo "Docs: README.md · docs/AWS.md · docs/SELF_HOST.md · docs/DEMO_SCRIPT.md"
+	@echo "Docs: README.md · docs/AWS.md · docs/SELF_HOST.md"
 
 install-js:
 	npm install --no-fund --no-audit

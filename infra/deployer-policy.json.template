@@ -61,7 +61,18 @@
         "iam:RemoveRoleFromInstanceProfile",
         "iam:ListInstanceProfilesForRole",
         "iam:ListAttachedRolePolicies",
-        "iam:ListRolePolicies"
+        "iam:ListRolePolicies",
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:GetUser",
+        "iam:TagUser",
+        "iam:UntagUser",
+        "iam:PutUserPolicy",
+        "iam:DeleteUserPolicy",
+        "iam:GetUserPolicy",
+        "iam:CreateAccessKey",
+        "iam:DeleteAccessKey",
+        "iam:ListAccessKeys"
       ],
       "Resource": "*"
     },
@@ -83,7 +94,24 @@
       "Resource": [
         "arn:aws:ec2:*:*:instance/*",
         "arn:aws:ssm:*::document/AWS-StartNonInteractiveCommand",
-        "arn:aws:ssm:*:*:document/AWS-StartNonInteractiveCommand"
+        "arn:aws:ssm:*:*:document/AWS-StartNonInteractiveCommand",
+        "arn:aws:ssm:*::document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+      ]
+    },
+    {
+      "Sid": "SsmSendCommand",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ssm:*::document/AWS-RunShellScript",
+        "arn:aws:ssm:*:*:document/AWS-RunShellScript"
       ]
     },
     {
@@ -158,7 +186,8 @@
         "secretsmanager:PutSecretValue",
         "secretsmanager:DescribeSecret",
         "secretsmanager:GetSecretValue",
-        "secretsmanager:TagResource"
+        "secretsmanager:TagResource",
+        "secretsmanager:DeleteSecret"
       ],
       "Resource": "arn:aws:secretsmanager:*:*:secret:memstream/*"
     }

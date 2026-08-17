@@ -49,7 +49,7 @@ export type ConnectDefaults = {
   platform_configured: boolean;
   /** Cloud worker target from MEMSTREAM_WORKER_COMPUTE (.env). */
   worker_compute: "ec2" | "lambda";
-  /** Judge skip-Connect path is configured on the server. */
+  /** Demo workspace (skip-Connect) is configured on the server. */
   demo_available: boolean;
   /** Active workspace is the shared demo connection. */
   is_demo: boolean;

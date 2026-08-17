@@ -28,6 +28,7 @@ POLICY_NAME="${MEMSTREAM_DEPLOYER_POLICY_NAME:-MemstreamDeployer}"
 # shellcheck disable=SC2016
 sed "s/\${CDC_S3_BUCKET}/${BUCKET}/g" \
   infra/deployer-policy.json.template >infra/deployer-policy.json
+# Output is gitignored (contains the real bucket name).
 
 bytes="$(wc -c <infra/deployer-policy.json | tr -d ' ')"
 echo "Wrote infra/deployer-policy.json ($bytes bytes) for s3://${BUCKET}"

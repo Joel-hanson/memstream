@@ -60,6 +60,22 @@ function parseTimeMs(iso: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** True when the worker has marked CDC keys as recently as the newest S3 object. */
+export function isWorkerCaughtUp(
+  latestCdcAt: string | null,
+  lastProcessedAt: string | null,
+  nowMs = Date.now(),
+  warnSeconds = MEMORY_LAG_WARN_SECONDS,
+): boolean {
+  const processedMs = parseTimeMs(lastProcessedAt);
+  if (processedMs == null) return false;
+  const cdcMs = parseTimeMs(latestCdcAt);
+  if (cdcMs == null) {
+    return (nowMs - processedMs) / 1000 <= CDC_RECENT_SECONDS;
+  }
+  return (cdcMs - processedMs) / 1000 <= warnSeconds;
+}
+
 /** True when the newest CDC object is recent enough that lag is actionable. */
 export function isCdcRecent(
   latestCdcAt: string | null,
@@ -150,13 +166,22 @@ export function derivePipelineHealth(
   const hasCdcPending =
     (input.s3Objects != null && input.s3Objects > 0) ||
     Boolean(input.latestCdcAt);
+  const processedCaughtUp =
+    isWorkerCaughtUp(input.latestCdcAt, input.lastProcessedAt, nowMs) ||
+    (input.s3Objects != null &&
+      input.s3Objects > 0 &&
+      input.processedKeys != null &&
+      input.processedKeys >= input.s3Objects);
   const workerBehind =
     hasCdcPending &&
     input.chunkCount === 0 &&
-    input.changefeedRunning > 0;
-  // Lag only alarms while CDC is fresh — quiet shop stays Healthy/Idle.
+    input.changefeedRunning > 0 &&
+    !processedCaughtUp;
+  // Lag only alarms while CDC is fresh — quiet shop / resolved-only
+  // Lambda ticks must not look Degraded when the worker already acked keys.
   const lagging =
     cdcRecent &&
+    !processedCaughtUp &&
     (workerBehind ||
       (lagSeconds != null && lagSeconds >= MEMORY_LAG_WARN_SECONDS));
   const quietBacklog =
@@ -196,9 +221,10 @@ export function derivePipelineHealth(
       latest_cdc_at: input.latestCdcAt,
       processed_keys: input.processedKeys,
       last_processed_at: input.lastProcessedAt,
-      detail: quietBacklog
-        ? "Quiet — no recent DB writes"
-        : "Up to date",
+      detail:
+        quietBacklog || (processedCaughtUp && (lagSeconds ?? 0) >= MEMORY_LAG_WARN_SECONDS)
+          ? "Quiet — no recent DB writes"
+          : "Up to date",
     };
   } else if (!input.bucketSet) {
     memory = {
@@ -237,11 +263,7 @@ export function derivePipelineHealth(
     status = "down";
   } else if (connection.status === "idle") {
     status = "unknown";
-  } else if (
-    changefeed.status === "warn" ||
-    memory.status === "warn" ||
-    (input.bucketSet && input.s3Objects === null)
-  ) {
+  } else if (changefeed.status === "warn" || memory.status === "warn") {
     status = "degraded";
   } else if (
     connection.status === "ok" &&
