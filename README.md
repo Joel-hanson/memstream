@@ -4,6 +4,8 @@ Turn CockroachDB writes into searchable agent memory, stored in the same databas
 
 Your app already writes rows to CockroachDB. An agent can query those tables with SQL or Cockroach MCP, but it still has to stitch several lookups together to understand what happened over time. Memstream watches table changes, turns selected columns into plain sentences, embeds them with AWS Bedrock, and stores the vectors back in CockroachDB next to your app tables. There is no separate vector database.
 
+![Memstream console onboarding](docs/memstream-landing-page.png)
+
 ## How it works
 
 ```text
