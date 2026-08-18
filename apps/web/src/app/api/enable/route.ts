@@ -53,6 +53,7 @@ export async function POST(req: Request) {
       embedModel:
         body?.embed_model?.trim() || "amazon.titan-embed-text-v2:0",
       workerCompute: body?.worker_compute?.trim(),
+      connectionId: body?.connection_id?.trim() || undefined,
       root,
     }),
   );

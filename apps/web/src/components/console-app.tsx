@@ -8,6 +8,7 @@ import { consoleApi, type OrgInfo, type ProfileVersionInfo } from "@/lib/api-cli
 import { isUsableDatabaseUrl } from "@/lib/connect-url";
 import { readStoredOrgId, storeOrgId } from "@/lib/org-session";
 import { copyToClipboard, suggestProfileId } from "@/lib/utils";
+import { createDraftRule } from "@/lib/draft-rule";
 import {
   defaultConnect,
   type ConnectConfig,
@@ -40,6 +41,7 @@ import {
   isActiveRunStatus,
   isTerminalRunStatus,
   jobFromRun,
+  pickJoinableRun,
   pickPrimaryRun,
   profileIdFromPath,
   readStoredEnableJobId,
@@ -74,6 +76,8 @@ export function ConsoleApp() {
   const [ruleEnabled, setRuleEnabled] = useState<Record<string, boolean>>({});
   const [saveId, setSaveId] = useState(() => suggestProfileId("discovered-app"));
   const [saveIdTouched, setSaveIdTouched] = useState(false);
+  const [tablesScanned, setTablesScanned] = useState<string[]>([]);
+  const [schema, setSchema] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState<BusyAction>(null);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -577,6 +581,8 @@ export function ConsoleApp() {
       setWatching(false);
       setProfileReady(false);
       setDraft(null);
+      setSchema({});
+      setTablesScanned([]);
       setError(null);
       if (opts?.clearUrl) {
         setHasStoredUrl(false);
@@ -697,6 +703,8 @@ export function ConsoleApp() {
         setError("Propose failed");
         return;
       }
+      setTablesScanned(result.value.tables_scanned || []);
+      setSchema(result.value.schema || {});
       const idHint = saveIdTouched
         ? saveId
         : suggestProfileId(application);
@@ -737,37 +745,6 @@ export function ConsoleApp() {
     );
   };
 
-  const onReuseWorkspace = (connection: {
-    id?: string;
-    name?: string;
-    database_url_hint?: string;
-    bucket?: string | null;
-    region?: string | null;
-    prefix?: string | null;
-  }) => {
-    const id = connection?.id ? String(connection.id) : "";
-    if (id) setConnectionId(id);
-    setHasStoredUrl(true);
-    setIsDemo(connection?.name === "demo");
-    if (connection?.database_url_hint) {
-      setUrlHint(String(connection.database_url_hint));
-    }
-    setConnect((c) => ({
-      ...c,
-      database_url: "",
-      bucket: connection.bucket?.trim() || c.bucket,
-      region: connection.region?.trim() || c.region,
-      prefix: connection.prefix?.trim() || c.prefix,
-    }));
-    setNotice(
-      connection?.name === "demo"
-        ? "Using demo workspace"
-        : `Using saved workspace${connection?.name ? ` (${connection.name})` : ""}`,
-    );
-    if (!profileReady) setModal("configure");
-    else setModal(null);
-  };
-
   const onLoadTemplate = async () => {
     setBusy("load-profile");
     setError(null);
@@ -793,6 +770,25 @@ export function ConsoleApp() {
     }
   };
 
+  const onAddRule = (table: string, column: string | null) => {
+    if (!draft) return;
+    const rule = createDraftRule({
+      table,
+      column,
+      columns: schema[table] || [],
+      existingNames: (draft.rules || []).map((r) => r.name),
+    });
+    setDraft({
+      ...draft,
+      changefeed: {
+        ...draft.changefeed,
+        tables: [...new Set([...(draft.changefeed?.tables || []), table])],
+      },
+      rules: [...(draft.rules || []), rule],
+    });
+    setRuleEnabled((m) => ({ ...m, [rule.name]: true }));
+  };
+
   const onChangeRuleTemplate = (name: string, template: string) => {
     setDraft((prev) => {
       if (!prev) return prev;
@@ -816,6 +812,10 @@ export function ConsoleApp() {
       const enabledRules = (draft.rules || []).filter(
         (r) => ruleEnabled[r.name] !== false,
       );
+      if (!enabledRules.length) {
+        setError("Add at least one rule");
+        return;
+      }
       const tablesFromRules = [
         ...new Set(enabledRules.map((r) => r.table).filter(Boolean)),
       ];
@@ -894,7 +894,7 @@ export function ConsoleApp() {
         storeOrgId(result.value.org.id);
         setOrgOnboarding(false);
         setOrgOpen(false);
-        setNotice(`Org ${result.value.org.name} ready — connect or use the demo workspace`);
+        setNotice(`Org ${result.value.org.name} ready — connect your cluster`);
       }
       await loadOrgs();
     } finally {
@@ -987,16 +987,20 @@ export function ConsoleApp() {
         return;
       }
       const connection = result.value.connection;
-      if (connection?.id) setConnectionId(String(connection.id));
+      const id = connection?.id ? String(connection.id) : "";
+      if (id) setConnectionId(id);
       setHasStoredUrl(true);
       setIsDemo(connection?.name === "demo");
       if (connection?.database_url_hint) {
         setUrlHint(String(connection.database_url_hint));
       }
       setConnect((c) => ({ ...c, database_url: "" }));
+      setConfigMode("discover");
       setModal("configure");
+      setNotice("Connected — scanning tables for memory rules");
+      await onPropose(undefined, id || undefined);
     } finally {
-      setBusy(null);
+      setBusy((current) => (current === "connect" ? null : current));
     }
   };
 
@@ -1016,7 +1020,40 @@ export function ConsoleApp() {
       if (connection?.database_url_hint) {
         setUrlHint(String(connection.database_url_hint));
       }
-      setConnect((c) => ({ ...c, database_url: "" }));
+      if (connection?.bucket || connection?.region || connection?.prefix) {
+        setConnect((c) => ({
+          ...c,
+          database_url: "",
+          bucket: connection.bucket?.trim() || c.bucket,
+          region: connection.region?.trim() || c.region,
+          prefix: connection.prefix?.trim() || c.prefix,
+        }));
+      } else {
+        setConnect((c) => ({ ...c, database_url: "" }));
+      }
+
+      const liveFromApi = result.value.live_run;
+      const live =
+        liveFromApi ||
+        pickJoinableRun(
+          runs.filter(
+            (r) =>
+              Boolean(r.app_database_label) &&
+              r.app_database_label === connection?.database_label,
+          ),
+        );
+      if (live) {
+        setRuns((prev) =>
+          prev.some((r) => r.id === live.id) ? prev : [live, ...prev],
+        );
+        selectRun(live);
+        setModal(null);
+        setNotice(
+          `Joined live Memstream (${runProfileLabel(live)}). You can Enable another profile alongside it.`,
+        );
+        return;
+      }
+
       setNotice("Using demo application database");
       if (!profileReady) setModal("configure");
     } finally {
@@ -1037,7 +1074,7 @@ export function ConsoleApp() {
           : undefined,
         bucket: fromRun?.bucket || connect.bucket,
         region: fromRun?.region || connect.region || undefined,
-        prefix: fromRun?.prefix || connect.prefix || undefined,
+        prefix: connect.prefix || undefined,
         profile_path: fromRun?.profile_path || profilePath,
         tables: fromRun?.tables || tables,
         deploy,
@@ -1070,6 +1107,30 @@ export function ConsoleApp() {
     () => runs.find((r) => r.id === activeRunId) ?? null,
     [runs, activeRunId],
   );
+  const replaceLiveLabel = useMemo(() => {
+    const same = runs.find((r) => {
+      const live =
+        r.status === RUN_STATUS.SUCCEEDED ||
+        (isActiveRunStatus(r.status) && !enableStepsComplete(r.steps));
+      return live && runProfileLabel(r) === profileLabel && r.id !== activeRunId;
+    });
+    return same ? runProfileLabel(same) : null;
+  }, [runs, profileLabel, activeRunId]);
+  const alongsideLiveLabel = useMemo(() => {
+    const names = [
+      ...new Set(
+        runs
+          .filter((r) => {
+            const live =
+              r.status === RUN_STATUS.SUCCEEDED ||
+              (isActiveRunStatus(r.status) && !enableStepsComplete(r.steps));
+            return live && runProfileLabel(r) !== profileLabel;
+          })
+          .map(runProfileLabel),
+      ),
+    ];
+    return names.length ? names.join(", ") : null;
+  }, [runs, profileLabel]);
 
   /** Anatomy / Live only for a real selected run, or enable in flight. */
   const showProof =
@@ -1078,7 +1139,6 @@ export function ConsoleApp() {
     job?.status === RUN_STATUS.QUEUED ||
     // Keep Live while /api/runs catches up after enable succeeds
     (Boolean(activeRunId) && job?.status === RUN_STATUS.SUCCEEDED);
-  const resumeRun = useMemo(() => pickPrimaryRun(runs), [runs]);
   const filteredRuns = useMemo(() => {
     if (runsFilter === "live") {
       return runs.filter(
@@ -1276,7 +1336,7 @@ export function ConsoleApp() {
   return (
     <div className="flex min-h-screen flex-col">
       <ConsoleHeaderBar
-        isDemo={isDemo}
+        isDemo={demoAvailable && isDemo}
         authUser={authUser}
         showProof={showProof}
         jobFailed={job?.status === RUN_STATUS.FAILED}
@@ -1356,8 +1416,7 @@ export function ConsoleApp() {
             setupStep={setupStep}
             credentialsSet={credentialsSet}
             profileReady={profileReady}
-            resumeRun={resumeRun}
-            runsCount={runs.length}
+            runs={runs}
             mcpCopied={mcpCopied}
             demoAvailable={demoAvailable}
             demoBusy={busy === "connect"}
@@ -1428,11 +1487,11 @@ export function ConsoleApp() {
         isBusy={isBusy}
         connectionId={connectionId}
         orgId={org?.id || readStoredOrgId()}
+        demoAvailable={demoAvailable}
         onSave={() => void onSaveConnect()}
         onCloudConnected={(connection, tablesPicked) =>
           void onCloudConnected(connection, tablesPicked)
         }
-        onReuseWorkspace={onReuseWorkspace}
       />
 
       <ConfigureModal
@@ -1478,6 +1537,10 @@ export function ConsoleApp() {
         onSaveProfile={() => void onSaveProfile()}
         profileVersions={profileVersions}
         onRestoreVersion={(version) => void onRestoreProfileVersion(version)}
+        scanError={modal === "configure" ? error : null}
+        tablesScanned={tablesScanned}
+        schema={schema}
+        onAddRule={onAddRule}
       />
 
       <SetupLogDialog
@@ -1515,6 +1578,8 @@ export function ConsoleApp() {
         onBack={() => setModal("configure")}
         onEnable={() => void onEnable()}
         onClose={() => setModal(null)}
+        replaceLiveLabel={replaceLiveLabel}
+        alongsideLiveLabel={alongsideLiveLabel}
       />
 
       <RunsSheet

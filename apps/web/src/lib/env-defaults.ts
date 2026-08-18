@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DEMO_CONNECTION_NAME,
+  DEMO_WORKSPACE_ENABLED,
   getActiveConnection,
   memstreamDatabaseUrl,
   resolveDemoApplicationDatabaseUrl,
@@ -124,7 +125,9 @@ export async function loadConnectDefaults(
 ): Promise<ConnectDefaults> {
   const platformConfigured = Boolean(memstreamDatabaseUrl(root));
   const ops = opsPrefill(root);
-  const demoAvailable = Boolean(resolveDemoApplicationDatabaseUrl(root));
+  const demoAvailable =
+    DEMO_WORKSPACE_ENABLED &&
+    Boolean(resolveDemoApplicationDatabaseUrl(root));
 
   if (!platformConfigured) {
     return emptyDefaults(ops, false, demoAvailable);
@@ -149,7 +152,7 @@ export async function loadConnectDefaults(
       platform_configured: true,
       worker_compute: ops.worker_compute,
       demo_available: demoAvailable,
-      is_demo: conn.name === DEMO_CONNECTION_NAME,
+      is_demo: demoAvailable && conn.name === DEMO_CONNECTION_NAME,
     };
   } catch {
     return emptyDefaults(ops, true, demoAvailable);

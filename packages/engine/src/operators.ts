@@ -77,6 +77,7 @@ export async function ensureDemoOperator(
        FROM memstream_operators WHERE username = $1`,
       [username],
     );
+    let operator: MemstreamOperator;
     if (existing.rows.length) {
       const row = existing.rows[0]!;
       // Refresh hash when explicit env password is set (operator may have changed it).
@@ -92,33 +93,41 @@ export async function ensureDemoOperator(
           [username, passwordHash],
         );
         const u = updated.rows[0]!;
-        return {
+        operator = {
           username: String(u.username),
           created_at: u.created_at != null ? String(u.created_at) : null,
           updated_at: u.updated_at != null ? String(u.updated_at) : null,
         };
+      } else {
+        operator = {
+          username: String(row.username),
+          created_at: row.created_at != null ? String(row.created_at) : null,
+          updated_at: row.updated_at != null ? String(row.updated_at) : null,
+        };
       }
-      return {
+    } else {
+      const passwordHash = hashPassword(password);
+      const result = await client.query(
+        `
+        INSERT INTO memstream_operators (username, password_hash, created_at, updated_at)
+        VALUES ($1, $2, now(), now())
+        RETURNING username, created_at::text, updated_at::text
+        `,
+        [username, passwordHash],
+      );
+      const row = result.rows[0]!;
+      operator = {
         username: String(row.username),
         created_at: row.created_at != null ? String(row.created_at) : null,
         updated_at: row.updated_at != null ? String(row.updated_at) : null,
       };
     }
-    const passwordHash = hashPassword(password);
-    const result = await client.query(
-      `
-      INSERT INTO memstream_operators (username, password_hash, created_at, updated_at)
-      VALUES ($1, $2, now(), now())
-      RETURNING username, created_at::text, updated_at::text
-      `,
-      [username, passwordHash],
-    );
-    const row = result.rows[0]!;
-    return {
-      username: String(row.username),
-      created_at: row.created_at != null ? String(row.created_at) : null,
-      updated_at: row.updated_at != null ? String(row.updated_at) : null,
-    };
+    if (username !== "demo") {
+      await client.query(
+        `DELETE FROM memstream_operators WHERE username = 'demo'`,
+      );
+    }
+    return operator;
   });
 }
 

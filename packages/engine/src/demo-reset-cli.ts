@@ -11,13 +11,14 @@
 import { rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { changefeedConnectionNameForRun } from "./cdc-prefix.js";
 import { cancelChangefeed } from "./changefeed.js";
 import { getActiveConnection } from "./connections.js";
 import { clearS3CdcPrefix } from "./console-actions.js";
 import { closePools, withClientObjects } from "./db.js";
 import { seedDemoHistoryMemory } from "./demo-history.js";
 import { forceReseedProfilesFromFiles } from "./profile-store.js";
-import { memstreamDatabaseUrl } from "./runs.js";
+import { listRuns, memstreamDatabaseUrl } from "./runs.js";
 import { resolveClusterUrl, withDatabaseName } from "./setup-db.js";
 
 const DEFAULTDB_LEFTOVER_TABLES = [
@@ -117,7 +118,7 @@ Default (--full):
   • force-reseed memstream_profiles from profiles/*.yaml as builtin
 
   Local / S3 / leftovers
-  • cancel active Memstream changefeed jobs and drop external://memstream_s3
+  • cancel active Memstream changefeed jobs and drop their external connections
   • clear data/cdc/inbox
   • clear objects under CDC S3 prefix (bucket/prefix from Connect or CDC_S3_*)
   • drop leftover demo tables from defaultdb (early-dev junk)
@@ -193,9 +194,24 @@ covers live shop traffic (unless --keep-changefeeds).
     canceledJobs = [];
   } else {
     try {
-      const canceled = await cancelChangefeed({ databaseUrl });
-      canceledJobs = canceled.canceledJobs;
-      droppedConnection = canceled.droppedConnection;
+      const names = new Set(["memstream_s3"]);
+      try {
+        for (const run of await listRuns(100, root)) {
+          names.add(changefeedConnectionNameForRun(run));
+        }
+      } catch {
+        /* platform DB optional during reset */
+      }
+      canceledJobs = [];
+      droppedConnection = false;
+      for (const name of names) {
+        const canceled = await cancelChangefeed({
+          databaseUrl,
+          connectionName: name,
+        });
+        canceledJobs.push(...canceled.canceledJobs);
+        if (canceled.droppedConnection) droppedConnection = true;
+      }
     } catch (err) {
       console.error(
         `warn: could not cancel changefeed jobs: ${
@@ -596,7 +612,7 @@ covers live shop traffic (unless --keep-changefeeds).
   } else if (canceledJobs != null) {
     console.log(
       `  changefeed jobs canceled: ${canceledJobs.length}${
-        droppedConnection ? " (dropped external://memstream_s3)" : ""
+        droppedConnection ? " (dropped Memstream external connections)" : ""
       }`,
     );
   } else {

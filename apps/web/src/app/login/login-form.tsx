@@ -1,7 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
 import { MemstreamMark } from "@/components/memstream-mark";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +10,8 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { useRouter } from "next/navigation";
+import { useState, type FormEvent } from "react";
 
 const USERNAME_MAX = 64;
 const PASSWORD_MAX = 128;
@@ -169,7 +169,7 @@ export function LoginForm() {
           </Button>
         </form>
 
-        <p className="text-center text-[0.65rem] text-muted-foreground">
+        {/* <p className="text-center text-[0.65rem] text-muted-foreground">
           Default demo credentials:{" "}
           <span className="font-mono">demo</span> /{" "}
           <span className="font-mono">demo</span>. Override with{" "}
@@ -179,7 +179,7 @@ export function LoginForm() {
           <span className="font-mono">memstream_operators</span>). Set{" "}
           <span className="font-mono">MEMSTREAM_AUTH_DISABLED=1</span> to skip
           the login gate locally.
-        </p>
+        </p> */}
       </div>
     </div>
   );

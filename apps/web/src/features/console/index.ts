@@ -3,6 +3,7 @@ export type { BusyAction, Modal } from "./types";
 export {
   enableStepsComplete,
   jobFromRun,
+  pickJoinableRun,
   pickPrimaryRun,
   profileIdFromPath,
   readStoredEnableJobId,

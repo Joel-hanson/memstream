@@ -15,6 +15,9 @@ import { sanitizeDatabaseUrlForStorage } from "./store-cockroach.js";
 /** Fixed workspace name for the demo / skip-Connect path. */
 export const DEMO_CONNECTION_NAME = "demo";
 
+/** Skip-Connect shared demo app DB. Off in the console until we want that path again. */
+export const DEMO_WORKSPACE_ENABLED = false;
+
 function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
   const out: Record<string, string> = {};
@@ -464,7 +467,7 @@ export async function upsertConnection(
       const updated = await client.query(
         `
         UPDATE memstream_connections SET
-          name = $2,
+          name = COALESCE($2, name),
           database_url_ciphertext = $3,
           database_label = $4,
           bucket = $5,
@@ -476,7 +479,16 @@ export async function upsertConnection(
         WHERE id = $1::uuid
         RETURNING ${SELECT_COLS}
         `,
-        [input.id, name, ciphertext, label, bucket, region, prefix, orgId],
+        [
+          input.id,
+          input.name?.trim() || null,
+          ciphertext,
+          label,
+          bucket,
+          region,
+          prefix,
+          orgId,
+        ],
       );
       if (updated.rows.length) {
         return rowToConnection(updated.rows[0]!, root);

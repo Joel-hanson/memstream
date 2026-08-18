@@ -5,6 +5,8 @@ import { resolveRequestDatabaseUrl } from "@/lib/resolve-database-url";
 
 export const runtime = "nodejs";
 
+/** Scan the connected app DB and return a draft profile (every public table). */
+
 export async function POST(req: Request) {
   const denied = guardConsoleApi(req, { heavy: true });
   if (denied) return denied;

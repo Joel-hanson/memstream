@@ -16,16 +16,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import type { MemstreamRun } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { runProfileLabel } from "./helpers";
+import { cn, formatRelativeTime } from "@/lib/utils";
+import { pickJoinableRun, pickPrimaryRun, runProfileLabel, runStatusLabel } from "./helpers";
+import { RUN_STATUS } from "./constants";
 import type { BusyAction } from "./types";
+
+const LANDING_RUNS_LIMIT = 5;
+
+function landingPreviewRuns(runs: MemstreamRun[]): MemstreamRun[] {
+  const primary = pickPrimaryRun(runs);
+  const rest = primary ? runs.filter((r) => r.id !== primary.id) : runs;
+  return (primary ? [primary, ...rest] : rest).slice(0, LANDING_RUNS_LIMIT);
+}
 
 export function SetupWizard({
   setupStep,
   credentialsSet,
   profileReady,
-  resumeRun,
-  runsCount,
+  runs,
   mcpCopied,
   demoAvailable,
   demoBusy,
@@ -41,8 +49,7 @@ export function SetupWizard({
   setupStep: 1 | 2 | 3;
   credentialsSet: boolean;
   profileReady: boolean;
-  resumeRun: MemstreamRun | undefined;
-  runsCount: number;
+  runs: MemstreamRun[];
   mcpCopied: boolean;
   demoAvailable: boolean;
   demoBusy: boolean;
@@ -55,37 +62,57 @@ export function SetupWizard({
   onSelectResume: (run: MemstreamRun) => void;
   onOpenRuns: () => void;
 }) {
+  const resumeRun = pickJoinableRun(runs);
+  const joinExisting = Boolean(resumeRun);
+  const showDemoCta = demoAvailable && !joinExisting && setupStep === 1;
   const primarySetup =
     setupStep === 1
-      ? demoAvailable
-        ? { label: "Use demo workspace", icon: RiFlashlightLine }
-        : { label: "Connect your own cluster", icon: RiPlugLine }
+      ? joinExisting && resumeRun
+        ? {
+            label: `Continue with ${runProfileLabel(resumeRun)}`,
+            icon: RiCheckLine,
+          }
+        : demoAvailable
+          ? { label: "Use demo workspace", icon: RiFlashlightLine }
+          : { label: "Connect your own cluster", icon: RiPlugLine }
       : setupStep === 2
         ? { label: "Configure", icon: RiSettings3Line }
         : { label: "Enable", icon: RiFlashlightLine };
 
   const PrimaryIcon = primarySetup.icon as ComponentType<{ className?: string }>;
-  const onPrimaryClick =
-    setupStep === 1 && demoAvailable ? onUseDemo : onPrimary;
+  const onPrimaryClick = () => {
+    if (setupStep === 1 && resumeRun) {
+      onSelectResume(resumeRun);
+      return;
+    }
+    if (setupStep === 1 && showDemoCta) {
+      onUseDemo();
+      return;
+    }
+    onPrimary();
+  };
+  const previewRuns = landingPreviewRuns(runs);
 
   return (
-    <div className="flex max-w-lg flex-col gap-6 pt-6 sm:pt-10">
-      <div className="space-y-2">
+    <div className="flex max-w-2xl flex-col gap-6 pt-6 sm:pt-10">
+      <div className="max-w-lg space-y-2">
         <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
           Index Cockroach writes so agents can search them
         </h1>
         <p className="text-sm text-muted-foreground">
           {setupStep === 1
-            ? demoAvailable
-              ? "Try our shared demo application database, or connect your own Cockroach cluster."
-              : "Connect your Cockroach cluster."
+            ? joinExisting
+              ? "A Memstream is already live on this database. Continue with it, or Configure another profile to stream in parallel."
+              : demoAvailable
+                ? "Try our shared demo application database, or connect your own Cockroach cluster."
+                : "Connect your Cockroach cluster."
             : setupStep === 2
               ? "Pick which tables Memstream should watch."
               : "Enable Memstream on those tables."}
         </p>
       </div>
 
-      <div className="space-y-4">
+      <div className="max-w-lg space-y-4">
         <ol className="space-y-0 border">
           {(
             [
@@ -170,16 +197,16 @@ export function SetupWizard({
             disabled={demoBusy}
             onClick={onPrimaryClick}
           >
-            {demoBusy && setupStep === 1 && demoAvailable ? (
+            {demoBusy && showDemoCta ? (
               <Spinner />
             ) : (
               <PrimaryIcon />
             )}
-            {demoBusy && setupStep === 1 && demoAvailable
+            {demoBusy && showDemoCta
               ? "Activating…"
               : primarySetup.label}
           </Button>
-          {setupStep === 1 && demoAvailable ? (
+          {showDemoCta ? (
             <Button
               type="button"
               variant="ghost"
@@ -188,6 +215,17 @@ export function SetupWizard({
             >
               <RiPlugLine />
               Connect your own cluster
+            </Button>
+          ) : null}
+          {setupStep === 1 && joinExisting ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={demoBusy}
+              onClick={onOpenConnect}
+            >
+              <RiPlugLine />
+              Connect a different cluster
             </Button>
           ) : null}
           {setupStep > 1 ? (
@@ -200,32 +238,86 @@ export function SetupWizard({
             {mcpCopied ? "Copied MCP" : "Copy Memstream MCP"}
           </Button>
         </div>
-
-        {resumeRun ? (
-          <p className="text-xs text-muted-foreground">
-            Or{" "}
-            <button
-              type="button"
-              className="underline underline-offset-2 hover:text-foreground"
-              onClick={() => onSelectResume(resumeRun)}
-            >
-              continue with {runProfileLabel(resumeRun)}
-            </button>
-            {runsCount > 1 ? (
-              <>
-                {" · "}
-                <button
-                  type="button"
-                  className="underline underline-offset-2 hover:text-foreground"
-                  onClick={onOpenRuns}
-                >
-                  see all ({runsCount})
-                </button>
-              </>
-            ) : null}
-          </p>
-        ) : null}
       </div>
+
+      {previewRuns.length > 0 ? (
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-xs font-medium text-muted-foreground">
+              Existing Memstreams
+            </h2>
+            {runs.length > LANDING_RUNS_LIMIT ? (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                onClick={onOpenRuns}
+              >
+                see all ({runs.length})
+              </button>
+            ) : null}
+          </div>
+          <div className="overflow-x-auto border">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b bg-muted/40 text-[0.65rem] text-muted-foreground">
+                  <th className="px-3 py-2 font-medium">Memstream</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="hidden px-3 py-2 font-medium sm:table-cell">
+                    Cluster
+                  </th>
+                  <th className="px-3 py-2 font-medium">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRuns.map((run) => {
+                  const when = formatRelativeTime(
+                    run.finished_at || run.created_at,
+                  );
+                  return (
+                    <tr
+                      key={run.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${runProfileLabel(run)}`}
+                      className="cursor-pointer border-b last:border-b-0 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none"
+                      onClick={() => onSelectResume(run)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onSelectResume(run);
+                        }
+                      }}
+                    >
+                      <td className="max-w-40 truncate px-3 py-2.5 font-medium">
+                        {runProfileLabel(run)}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Badge
+                          variant={
+                            run.status === RUN_STATUS.SUCCEEDED
+                              ? "secondary"
+                              : run.status === RUN_STATUS.FAILED
+                                ? "destructive"
+                                : "outline"
+                          }
+                        >
+                          {runStatusLabel(run.status)}
+                        </Badge>
+                      </td>
+                      <td className="hidden max-w-48 truncate px-3 py-2.5 font-mono text-[0.65rem] text-muted-foreground sm:table-cell">
+                        {run.app_database_label || "—"}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
+                        {when || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -459,8 +459,6 @@ Resources:
             MEMSTREAM_SSLROOTCERT=/opt/memstream/certs/root.crt
             CONFIG_SECRET_ARN=${ConfigSecretArn}
             CDC_SINK_SECRET_ARN=${CdcSinkSecret}
-            MEMSTREAM_DEMO_USER=demo
-            MEMSTREAM_DEMO_PASSWORD=demo
             MEMSTREAM_AUTH_REQUIRED=1
             ENVEOF
 

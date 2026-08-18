@@ -1,7 +1,11 @@
 import {
+  DEMO_WORKSPACE_ENABLED,
   ensureDemoConnection,
+  listRuns,
   memstreamDatabaseUrl,
+  pickLiveRunForAppLabel,
   resolveDemoApplicationDatabaseUrl,
+  type MemstreamRun,
 } from "@memstream/engine";
 import { jsonError, jsonOk, webRepoRoot } from "@/lib/api";
 import { guardConsoleApi } from "@/lib/console-auth";
@@ -40,12 +44,39 @@ function publicConnection(connection: {
   };
 }
 
-/** Activate the shared demo application workspace (skip Connect paste). */
+function publicLiveRun(run: MemstreamRun) {
+  return {
+    id: run.id,
+    status: run.status,
+    profile_path: run.profile_path,
+    tables: run.tables,
+    bucket: run.bucket,
+    region: run.region,
+    prefix: run.prefix,
+    stack_name: run.stack_name,
+    shop_url: run.shop_url,
+    job_id: run.job_id,
+    app_database_label: run.app_database_label,
+    connection_id: run.connection_id,
+    workspace_id: run.workspace_id,
+    log: run.log,
+    steps: run.steps,
+    error: run.error,
+    created_at: run.created_at,
+    finished_at: run.finished_at,
+  };
+}
+
+/** Activate the shared demo application workspace (skip Connect paste).
+ * Joins an existing live Memstream on that database when present. */
 export async function POST(req: Request) {
   const denied = guardConsoleApi(req);
   if (denied) return denied;
 
   const root = webRepoRoot();
+  if (!DEMO_WORKSPACE_ENABLED) {
+    return jsonError("Demo workspace is not available", 404);
+  }
   if (!memstreamDatabaseUrl(root)) {
     return jsonError(
       "MEMSTREAM_DATABASE_URL required to store the application connection",
@@ -65,7 +96,14 @@ export async function POST(req: Request) {
       root,
       orgId,
     });
-    return jsonOk({ connection: publicConnection(connection) });
+    const liveRun = pickLiveRunForAppLabel(
+      await listRuns(50, root),
+      connection.database_label,
+    );
+    return jsonOk({
+      connection: publicConnection(connection),
+      live_run: liveRun ? publicLiveRun(liveRun) : null,
+    });
   } catch (err) {
     return jsonError(err instanceof Error ? err.message : String(err), 500);
   }

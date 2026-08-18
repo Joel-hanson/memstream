@@ -80,6 +80,7 @@ export type OrgResponse = {
 
 export type UpsertConnectionResponse = {
   connection?: PublicConnection;
+  live_run?: MemstreamRun | null;
   detail?: string;
 };
 
@@ -98,6 +99,8 @@ export type ProposeBody = {
 
 export type ProposeResponse = {
   profile?: ProfileDraft;
+  tables_scanned?: string[];
+  schema?: Record<string, string[]>;
   detail?: string;
 };
 

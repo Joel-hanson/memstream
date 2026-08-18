@@ -5,6 +5,12 @@
 
 import { buildEmbedder, buildStore } from "./factory.js";
 import { getActiveConnection } from "./connections.js";
+import { runIdFromCdcKey } from "./cdc-prefix.js";
+import {
+  newCdcProfileCache,
+  profileForCdcKey,
+  type CdcProfileCache,
+} from "./cdc-route.js";
 import type { Profile } from "./profile.js";
 import { resolveProfile } from "./profile-store.js";
 import { processCdcS3Object } from "./process-cdc.js";
@@ -24,15 +30,22 @@ type S3Event = {
 };
 
 type Runtime = {
-  profile: Profile;
-  embedder: Embedder;
+  fallbackProfile: Profile;
+  embedders: Map<string, Embedder>;
   store: MemoryStore;
   state: KeyState;
   region: string;
   connectionId: string | null;
+  root: string;
+  embedderKind: string;
+  cache: CdcProfileCache;
 };
 
 let runtimePromise: Promise<Runtime> | null = null;
+
+function embedderKey(profile: Profile): string {
+  return `${profile.embedding.model}:${profile.embedding.dimensions}`;
+}
 
 async function getRuntime(): Promise<Runtime> {
   if (!runtimePromise) {
@@ -49,12 +62,13 @@ async function getRuntime(): Promise<Runtime> {
       const profileRef =
         process.env.MEMORY_PROFILE?.trim() || "commerce";
       const root = process.env.LAMBDA_TASK_ROOT || process.cwd();
-      const profile = await resolveProfile(profileRef, root);
+      const fallbackProfile = await resolveProfile(profileRef, root);
       const region = process.env.AWS_REGION || "us-east-1";
-      const embedder = buildEmbedder(
-        process.env.MEMSTREAM_EMBEDDER || "bedrock",
-        profile,
-        { region },
+      const embedderKind = process.env.MEMSTREAM_EMBEDDER || "bedrock";
+      const embedders = new Map<string, Embedder>();
+      embedders.set(
+        embedderKey(fallbackProfile),
+        buildEmbedder(embedderKind, fallbackProfile, { region }),
       );
       let connectionId = process.env.MEMSTREAM_CONNECTION_ID?.trim() || null;
       let databaseUrl = process.env.DATABASE_URL?.trim() || "";
@@ -71,7 +85,7 @@ async function getRuntime(): Promise<Runtime> {
       }
       const store = buildStore(
         process.env.MEMSTREAM_STORE || "cockroach",
-        profile,
+        fallbackProfile,
         {
           databaseUrl: databaseUrl || undefined,
           connectionId,
@@ -87,7 +101,17 @@ async function getRuntime(): Promise<Runtime> {
         root,
         fileFallbackPath: "/tmp/memstream-s3-state.json",
       });
-      return { profile, embedder, store, state, region, connectionId };
+      return {
+        fallbackProfile,
+        embedders,
+        store,
+        state,
+        region,
+        connectionId,
+        root,
+        embedderKind,
+        cache: newCdcProfileCache(),
+      };
     })();
   }
   return runtimePromise;
@@ -114,21 +138,42 @@ export async function handler(event: S3Event): Promise<{
       continue;
     }
     try {
+      const profile = await profileForCdcKey({
+        key,
+        fallback: rt.fallbackProfile,
+        root: rt.root,
+        cache: rt.cache,
+      });
+      if (!profile) {
+        if (runIdFromCdcKey(key)) {
+          throw new Error(`no live Memstream for ${key} yet`);
+        }
+        skipped += 1;
+        continue;
+      }
+      let embedder = rt.embedders.get(embedderKey(profile));
+      if (!embedder) {
+        embedder = buildEmbedder(rt.embedderKind, profile, {
+          region: rt.region,
+        });
+        rt.embedders.set(embedderKey(profile), embedder);
+      }
       const result = await processCdcS3Object({
         bucket,
         key,
         region: rt.region,
-        profile: rt.profile,
-        embedder: rt.embedder,
+        profile,
+        embedder,
         store: rt.store,
         state: rt.state,
+        connectionId: rt.connectionId,
       });
       if (result.skipped) skipped += 1;
       else processed += 1;
     } catch (err) {
-      errors.push(
-        `${bucket}/${key}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/no live Memstream/.test(msg)) throw err;
+      errors.push(`${bucket}/${key}: ${msg}`);
     }
   }
 

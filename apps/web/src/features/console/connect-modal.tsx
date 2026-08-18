@@ -95,9 +95,9 @@ export function ConnectModal({
   isBusy,
   connectionId,
   orgId,
+  demoAvailable = false,
   onSave,
   onCloudConnected,
-  onReuseWorkspace,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -111,9 +111,9 @@ export function ConnectModal({
   isBusy: boolean;
   connectionId: string | null;
   orgId?: string | null;
+  demoAvailable?: boolean;
   onSave: () => void;
   onCloudConnected: (connection: PublicConnection, tables: string[]) => void;
-  onReuseWorkspace: (connection: PublicConnection) => void;
 }) {
   const [mode, setMode] = useState<"url" | "cloud">("url");
   const [apiKey, setApiKey] = useState("");
@@ -132,10 +132,6 @@ export function ConnectModal({
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [clustersLoaded, setClustersLoaded] = useState(false);
   const [clusterStatus, setClusterStatus] = useState<string | null>(null);
-  const [saved, setSaved] = useState<PublicConnection[]>([]);
-  const [savedLoading, setSavedLoading] = useState(false);
-  const [activatingId, setActivatingId] = useState<string | null>(null);
-  const [reuseError, setReuseError] = useState<string | null>(null);
 
   const setLoad = (patch: Partial<CloudLoading>) =>
     setLoading((prev) => ({ ...prev, ...patch }));
@@ -143,50 +139,7 @@ export function ConnectModal({
   useEffect(() => {
     if (!open) return;
     setCloudError(null);
-    setReuseError(null);
-    let cancelled = false;
-    setSavedLoading(true);
-    void consoleApi.connection.list().then((result) => {
-      if (cancelled) return;
-      setSavedLoading(false);
-      if (result.ok) {
-        setSaved(result.value.connections || []);
-      } else {
-        setSaved([]);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, orgId]);
-
-  useEffect(() => {
-    if (!open) return;
-    setCloudError(null);
   }, [open, mode]);
-
-  const onActivateSaved = async (id: string) => {
-    setActivatingId(id);
-    setReuseError(null);
-    try {
-      const result = await consoleApi.connection.activate(
-        id,
-        orgId || undefined,
-      );
-      if (!result.ok) {
-        setReuseError(result.error.message || "Could not reuse workspace");
-        return;
-      }
-      const connection = result.value.connection;
-      if (!connection) {
-        setReuseError("Could not reuse workspace");
-        return;
-      }
-      onReuseWorkspace(connection);
-    } finally {
-      setActivatingId(null);
-    }
-  };
 
   const loadClusters = async () => {
     if (!apiKey.trim()) {
@@ -379,83 +332,26 @@ export function ConnectModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] min-w-0 overflow-x-hidden overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Connect</DialogTitle>
           <DialogDescription>
-            Connect the customer application database. Prefer{" "}
-            <span className="font-medium text-foreground">
-              Use demo workspace
-            </span>{" "}
-            when available, reuse a saved workspace, or paste a URL / use
-            Cockroach Cloud.
+            {demoAvailable ? (
+              <>
+                Connect the customer application database. Prefer{" "}
+                <span className="font-medium text-foreground">
+                  Use demo workspace
+                </span>{" "}
+                when available, or paste a URL / use Cockroach Cloud.
+              </>
+            ) : (
+              <>
+                Connect the customer application database. Paste a URL, or sign
+                in with Cockroach Cloud.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
-
-        {savedLoading || saved.length > 0 ? (
-          <div className="space-y-2 border-b border-border pb-4">
-            <p className="text-xs font-medium text-foreground">
-              Saved workspaces
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Reuse a prior connection (including Cockroach Cloud) without
-              pasting the API key again.
-            </p>
-            {savedLoading ? (
-              <LoadingSection label="Loading saved workspaces…" />
-            ) : (
-              <ul className="max-h-36 space-y-1.5 overflow-y-auto">
-                {saved.map((c) => {
-                  const id = c.id;
-                  const active = Boolean(c.is_active) || id === connectionId;
-                  const label =
-                    c.name === "demo"
-                      ? "Demo workspace"
-                      : c.name || "Workspace";
-                  const detail =
-                    c.database_url_hint ||
-                    (c.database_label ? `…/${c.database_label}` : "");
-                  return (
-                    <li key={id}>
-                      <button
-                        type="button"
-                        disabled={isBusy || activatingId !== null}
-                        onClick={() => void onActivateSaved(id)}
-                        className="flex w-full items-center justify-between gap-2 border border-border bg-muted/30 px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted/60 disabled:opacity-60"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium text-foreground">
-                            {label}
-                            {active ? (
-                              <span className="ml-1.5 font-normal text-muted-foreground">
-                                (active)
-                              </span>
-                            ) : null}
-                          </span>
-                          {detail ? (
-                            <span className="block truncate font-mono text-muted-foreground">
-                              {detail}
-                            </span>
-                          ) : null}
-                        </span>
-                        {activatingId === id ? (
-                          <Spinner className="size-3.5 shrink-0" />
-                        ) : (
-                          <span className="shrink-0 text-muted-foreground">
-                            Use
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {reuseError ? (
-              <p className="text-xs text-destructive">{reuseError}</p>
-            ) : null}
-          </div>
-        ) : null}
 
         <Tabs
           value={mode}
@@ -566,8 +462,7 @@ export function ConnectModal({
                   />
                   <FieldDescription>
                     Cloud Console → Access → Service Accounts. Key stays in
-                    this session; SQL URL is stored encrypted. After the first
-                    save, reuse it from Saved workspaces above.
+                    this session; SQL URL is stored encrypted.
                   </FieldDescription>
                 </Field>
                 <div className="flex flex-col gap-2">

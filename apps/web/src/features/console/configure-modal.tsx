@@ -60,6 +60,10 @@ export function ConfigureModal({
   onSaveProfile,
   profileVersions,
   onRestoreVersion,
+  scanError,
+  tablesScanned,
+  schema,
+  onAddRule,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -87,6 +91,10 @@ export function ConfigureModal({
   onSaveProfile: () => void;
   profileVersions: ProfileVersionInfo[];
   onRestoreVersion: (version: number) => void;
+  scanError?: string | null;
+  tablesScanned?: string[];
+  schema?: Record<string, string[]>;
+  onAddRule?: (table: string, column: string | null) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -94,7 +102,7 @@ export function ConfigureModal({
         <DialogHeader className="shrink-0">
           <DialogTitle>Configure</DialogTitle>
           <DialogDescription>
-            Start from a template, or scan your schema and edit the rules.
+            Start from a template, or scan your schema and add a rule for any table or column.
           </DialogDescription>
         </DialogHeader>
         <Tabs
@@ -305,6 +313,11 @@ export function ConfigureModal({
                     {busy === "propose" ? "Scanning…" : "Propose from schema"}
                   </Button>
                 ) : null}
+                {scanError ? (
+                  <p className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {scanError}
+                  </p>
+                ) : null}
                 {draft ? (
                   <>
                     <RuleDraftList
@@ -312,6 +325,13 @@ export function ConfigureModal({
                       ruleEnabled={ruleEnabled}
                       onToggle={onToggleRule}
                       onChangeTemplate={onChangeRuleTemplate}
+                      schema={schema}
+                      onAddRule={onAddRule}
+                      emptyHint={
+                        tablesScanned?.length
+                          ? `Scanned ${tablesScanned.join(", ")}. Use Add rule on a table to watch a column.`
+                          : undefined
+                      }
                     />
                     <Field>
                       <FieldLabel htmlFor="saveId">
@@ -339,11 +359,17 @@ export function ConfigureModal({
               <Button type="button" variant="outline" onClick={onBack}>
                 Back
               </Button>
-              <Button
-                type="button"
-                disabled={isBusy || !draft}
-                onClick={onSaveProfile}
-              >
+                  <Button
+                    type="button"
+                    disabled={
+                      isBusy ||
+                      !draft ||
+                      !(draft.rules || []).some(
+                        (r) => ruleEnabled[r.name] !== false,
+                      )
+                    }
+                    onClick={onSaveProfile}
+                  >
                 {busy === "save-profile" ? <Spinner /> : null}
                 {busy === "save-profile" ? "Saving…" : "Save & continue"}
               </Button>

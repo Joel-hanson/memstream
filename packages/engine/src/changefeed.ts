@@ -1,6 +1,7 @@
 /** Changefeed creation helpers. */
 
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
+import { isUuid, normalizeCdcPrefix } from "./cdc-prefix.js";
 import { withClientObjects } from "./db.js";
 
 /** SQL identifier for EXTERNAL CONNECTION / table names (no quotes). */
@@ -177,6 +178,42 @@ const ACTIVE_CHANGEFEED_STATUS = new Set([
   "retry-running",
 ]);
 
+function changefeedJobText(row: Record<string, unknown>): string {
+  const named = ["sink_uri", "sink", "description"].map((key) =>
+    String(row[key] ?? ""),
+  );
+  const blob = named.filter(Boolean).join("\n");
+  if (blob) return blob.toLowerCase();
+  return Object.values(row)
+    .filter((v) => typeof v === "string" && v.length > 0)
+    .join("\n")
+    .toLowerCase();
+}
+
+/**
+ * True only when this SHOW CHANGEFEED JOBS row is clearly this Memstream
+ * sink. Unknown/redacted rows are left running — never cancel every job.
+ */
+export function changefeedJobMatchesConnection(
+  row: Record<string, unknown>,
+  connectionName: string,
+  prefix?: string | null,
+): boolean {
+  const name = connectionName.trim().toLowerCase();
+  if (!name) return false;
+  const text = changefeedJobText(row);
+  if (!text) return false;
+  if (text.includes(`external://${name}`)) return true;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`(?:^|[^a-z0-9_])${escaped}(?:[^a-z0-9_]|$)`).test(text)) {
+    return true;
+  }
+  const p = prefix ? normalizeCdcPrefix(prefix) : "";
+  const last = p.replace(/\/$/, "").split("/").pop() || "";
+  if (last && isUuid(last) && text.includes(p.toLowerCase())) return true;
+  return false;
+}
+
 type QueryClient = {
   query: (
     text: string,
@@ -190,32 +227,21 @@ type QueryClient = {
 export async function cancelActiveChangefeedJobs(
   client: QueryClient,
   connectionName: string,
+  prefix?: string | null,
 ): Promise<string[]> {
   if (!isSafeSqlIdent(connectionName)) {
     throw new Error(
       `invalid connection name ${JSON.stringify(connectionName)}`,
     );
   }
-  const needle = `external://${connectionName}`.toLowerCase();
   const canceledJobs: string[] = [];
   const jobs = await client.query("SHOW CHANGEFEED JOBS");
-  const hasSink = jobs.fields.some(
-    (f) => f.name.toLowerCase() === "sink_uri",
-  );
   for (const row of jobs.rows) {
     const jobId = String(row.job_id ?? "");
     if (!/^\d+$/.test(jobId)) continue;
     const status = String(row.status ?? "").toLowerCase();
     if (!ACTIVE_CHANGEFEED_STATUS.has(status)) continue;
-    if (hasSink) {
-      const sink = String(row.sink_uri ?? "").toLowerCase();
-      if (
-        !sink.includes(needle) &&
-        !sink.includes(connectionName.toLowerCase())
-      ) {
-        continue;
-      }
-    }
+    if (!changefeedJobMatchesConnection(row, connectionName, prefix)) continue;
     await client.query(`CANCEL JOB ${jobId}`);
     canceledJobs.push(jobId);
   }
@@ -225,22 +251,13 @@ export async function cancelActiveChangefeedJobs(
 function countActiveChangefeedJobs(
   rows: Record<string, unknown>[],
   connectionName: string,
-  hasSink: boolean,
+  prefix?: string | null,
 ): number {
-  const needle = `external://${connectionName}`.toLowerCase();
   let n = 0;
   for (const row of rows) {
     const status = String(row.status ?? "").toLowerCase();
     if (!ACTIVE_CHANGEFEED_STATUS.has(status)) continue;
-    if (hasSink) {
-      const sink = String(row.sink_uri ?? "").toLowerCase();
-      if (
-        !sink.includes(needle) &&
-        !sink.includes(connectionName.toLowerCase())
-      ) {
-        continue;
-      }
-    }
+    if (!changefeedJobMatchesConnection(row, connectionName, prefix)) continue;
     n += 1;
   }
   return n;
@@ -313,6 +330,7 @@ export async function createChangefeed(options: {
     const canceledJobs = await cancelActiveChangefeedJobs(
       client,
       connectionName,
+      prefix,
     );
     try {
       await client.query(`DROP EXTERNAL CONNECTION ${connectionName}`);
@@ -326,16 +344,13 @@ export async function createChangefeed(options: {
       `CREATE CHANGEFEED FOR TABLE ${tableList} INTO 'external://${connectionName}' WITH updated, diff, format = json`,
     );
     const jobs = await client.query("SHOW CHANGEFEED JOBS");
-    const hasSink = jobs.fields.some(
-      (f) => f.name.toLowerCase() === "sink_uri",
-    );
     return {
       tables: tableList,
       connectionName,
       jobRows: countActiveChangefeedJobs(
         jobs.rows as Record<string, unknown>[],
         connectionName,
-        hasSink,
+        prefix,
       ),
       canceledJobs,
       statementsRedacted,
@@ -353,6 +368,7 @@ export interface CancelChangefeedResult {
 export async function cancelChangefeed(options: {
   databaseUrl: string;
   connectionName?: string;
+  prefix?: string | null;
 }): Promise<CancelChangefeedResult> {
   const connectionName = options.connectionName ?? "memstream_s3";
   if (!isSafeSqlIdent(connectionName)) {
@@ -365,6 +381,7 @@ export async function cancelChangefeed(options: {
     const canceledJobs = await cancelActiveChangefeedJobs(
       client,
       connectionName,
+      options.prefix,
     );
 
     let droppedConnection = false;

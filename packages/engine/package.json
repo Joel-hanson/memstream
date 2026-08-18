@@ -22,6 +22,10 @@
     "./naming": {
       "types": "./dist/naming.d.ts",
       "import": "./dist/naming.js"
+    },
+    "./pick-run": {
+      "types": "./dist/pick-run.d.ts",
+      "import": "./dist/pick-run.js"
     }
   },
   "scripts": {

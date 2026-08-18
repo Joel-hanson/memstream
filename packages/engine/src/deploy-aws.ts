@@ -202,6 +202,10 @@ export async function deployAwsStack(
       DATABASE_URL: databaseUrl || "",
       MEMSTREAM_DATABASE_URL: memstreamUrl,
       MEMSTREAM_SECRETS_KEY: process.env.MEMSTREAM_SECRETS_KEY || "",
+      DEMO_APPLICATION_DATABASE_URL:
+        process.env.DEMO_APPLICATION_DATABASE_URL || "",
+      MEMSTREAM_DEMO_USER: process.env.MEMSTREAM_DEMO_USER || "",
+      MEMSTREAM_DEMO_PASSWORD: process.env.MEMSTREAM_DEMO_PASSWORD || "",
     },
   });
   log(

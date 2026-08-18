@@ -14,8 +14,14 @@ import { runPollLoop } from "./loop.js";
 import { Indexer } from "./pipeline.js";
 import { resolveProfile } from "./profile-store.js";
 import { repoRoot } from "./console-actions.js";
+import { cdcWatchPrefix } from "./cdc-prefix.js";
+import {
+  newCdcProfileCache,
+  processCdcS3Prefix,
+} from "./cdc-route.js";
 import { createShutdownController } from "./shutdown.js";
 import { closePools } from "./db.js";
+import { getPlatformState } from "./state-manager.js";
 
 function envFlag(name: string): boolean {
   const v = (process.env[name] || "").toLowerCase();
@@ -169,24 +175,7 @@ Options:
     databaseUrl: databaseUrl || undefined,
     connectionId: connectionId || undefined,
   });
-  const source = await buildEventSource(sourceKind, {
-    eventsFile: values.events,
-    eventsDir: values["events-dir"],
-    stateFile: values["state-file"] as string | undefined,
-    s3Bucket: s3Bucket || undefined,
-    s3Prefix,
-    awsRegion,
-    connectionId: connectionId || undefined,
-    root,
-  });
-
-  const indexer = new Indexer(
-    profile,
-    source,
-    embedder,
-    store,
-    connectionId || null,
-  );
+  const watchPrefix = cdcWatchPrefix(s3Prefix);
   const label = `source=${sourceKind} embedder=${values.embedder} store=${storeKind}`;
   const watch = Boolean(values.watch);
   const shutdown = createShutdownController({
@@ -196,12 +185,75 @@ Options:
   });
   if (watch) shutdown.install();
 
-  await runPollLoop(indexer, {
-    watch,
-    interval: Number(values["poll-interval"] || 5),
-    label,
-    shouldContinue: shutdown.shouldContinue,
-  });
+  if (sourceKind === "s3") {
+    const state = await getPlatformState(root).cdcKeys({
+      source: "s3",
+      connectionId: connectionId || undefined,
+      bucket: s3Bucket,
+      prefix: watchPrefix,
+      stateFile: values["state-file"] as string | undefined,
+      root,
+      fileFallbackPath: ".memstream-state/s3-fallback.json",
+    });
+    const cache = newCdcProfileCache();
+    const embedders = new Map([[`${profile.embedding.model}:${profile.embedding.dimensions}`, embedder]]);
+    const interval = Number(values["poll-interval"] || 5);
+    const sleep = (seconds: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+    while (true) {
+      const result = await processCdcS3Prefix({
+        bucket: s3Bucket,
+        prefix: watchPrefix,
+        fallbackProfile: profile,
+        embedderFor: (p) => {
+          const k = `${p.embedding.model}:${p.embedding.dimensions}`;
+          let e = embedders.get(k);
+          if (!e) {
+            e = buildEmbedder(values.embedder as string, p, { region: awsRegion });
+            embedders.set(k, e);
+          }
+          return e;
+        },
+        store,
+        state,
+        region: awsRegion,
+        connectionId: connectionId || null,
+        root,
+        cache,
+      });
+      console.error(
+        `events_seen=${result.processed + result.skipped} chunks_batch=${result.processed} ${label}`.trim(),
+      );
+      if (!watch) break;
+      if (!shutdown.shouldContinue()) break;
+      await sleep(interval);
+    }
+  } else {
+    const source = await buildEventSource(sourceKind, {
+      eventsFile: values.events,
+      eventsDir: values["events-dir"],
+      stateFile: values["state-file"] as string | undefined,
+      s3Bucket: s3Bucket || undefined,
+      s3Prefix,
+      awsRegion,
+      connectionId: connectionId || undefined,
+      root,
+    });
+
+    const indexer = new Indexer(
+      profile,
+      source,
+      embedder,
+      store,
+      connectionId || null,
+    );
+    await runPollLoop(indexer, {
+      watch,
+      interval: Number(values["poll-interval"] || 5),
+      label,
+      shouldContinue: shutdown.shouldContinue,
+    });
+  }
 
   await closePools();
 

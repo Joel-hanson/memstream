@@ -342,6 +342,23 @@ export async function createRun(
   });
 }
 
+/** Persist the per-run CDC sink prefix after the run row exists. */
+export async function updateRunPrefix(
+  runId: string,
+  prefix: string,
+  root = findRepoRoot(),
+): Promise<void> {
+  const url = memstreamDatabaseUrl(root);
+  if (!url) return;
+  await ensureMemstreamSchema(root);
+  await withClientObjects(url, async (client) => {
+    await client.query(
+      `UPDATE memstream_runs SET prefix = $2 WHERE id = $1::uuid`,
+      [runId, prefix],
+    );
+  });
+}
+
 /** Persist enable progress — platform runs are the durable source of truth. */
 export async function updateRunProgress(
   runId: string,

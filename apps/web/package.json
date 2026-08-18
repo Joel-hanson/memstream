@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3000",
-    "build": "next build",
-    "start": "next start --hostname 0.0.0.0 --port 3000",
-    "lint": "next lint"
+    "dev": "cd ../.. && next dev apps/web --port 3000",
+    "build": "cd ../.. && next build apps/web",
+    "start": "cd ../.. && next start apps/web --hostname 0.0.0.0 --port 3000",
+    "lint": "cd ../.. && next lint apps/web"
   },
   "dependencies": {
     "@memstream/engine": "*",

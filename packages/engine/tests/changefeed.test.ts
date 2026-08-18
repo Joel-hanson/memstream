@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildS3Uri,
   cancelActiveChangefeedJobs,
+  changefeedJobMatchesConnection,
   isSafeSqlIdent,
   parseChangefeedTables,
   resolveCdcSinkAuth,
@@ -67,6 +68,99 @@ describe("cancelActiveChangefeedJobs", () => {
     expect(queries).toContain("CANCEL JOB 102");
     expect(queries).not.toContain("CANCEL JOB 103");
     expect(queries).not.toContain("CANCEL JOB 104");
+  });
+
+  it("does not cancel every job when sink_uri is missing", async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (text: string) => {
+        queries.push(text);
+        if (text === "SHOW CHANGEFEED JOBS") {
+          return {
+            fields: [{ name: "job_id" }, { name: "status" }],
+            rows: [
+              { job_id: "201", status: "running" },
+              { job_id: "202", status: "running" },
+            ],
+          };
+        }
+        return { fields: [], rows: [] };
+      }),
+    };
+    const canceled = await cancelActiveChangefeedJobs(client, "memstream_s3");
+    expect(canceled).toEqual([]);
+    expect(queries).not.toContain("CANCEL JOB 201");
+    expect(queries).not.toContain("CANCEL JOB 202");
+  });
+
+  it("does not cancel a sibling Memstream sink", async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (text: string) => {
+        queries.push(text);
+        if (text === "SHOW CHANGEFEED JOBS") {
+          return {
+            fields: [
+              { name: "job_id" },
+              { name: "status" },
+              { name: "sink_uri" },
+              { name: "description" },
+            ],
+            rows: [
+              {
+                job_id: "301",
+                status: "running",
+                sink_uri: "external://memstream_s3",
+                description:
+                  "CREATE CHANGEFEED FOR TABLE orders INTO 'external://memstream_s3'",
+              },
+              {
+                job_id: "302",
+                status: "running",
+                sink_uri:
+                  "external://memstream_550e8400e29b41d4a716446655440000",
+                description:
+                  "CREATE CHANGEFEED FOR TABLE users INTO 'external://memstream_550e8400e29b41d4a716446655440000'",
+              },
+            ],
+          };
+        }
+        return { fields: [], rows: [] };
+      }),
+    };
+    const canceled = await cancelActiveChangefeedJobs(
+      client,
+      "memstream_550e8400e29b41d4a716446655440000",
+      "cdc/550e8400-e29b-41d4-a716-446655440000/",
+    );
+    expect(canceled).toEqual(["302"]);
+    expect(queries).toContain("CANCEL JOB 302");
+    expect(queries).not.toContain("CANCEL JOB 301");
+  });
+});
+
+describe("changefeedJobMatchesConnection", () => {
+  it("matches description when sink_uri is a redacted s3 uri", () => {
+    expect(
+      changefeedJobMatchesConnection(
+        {
+          description:
+            "CREATE CHANGEFEED FOR TABLE orders INTO 'external://memstream_s3'",
+          sink_uri: "s3://memstream-cdc/cdc/?AWS_ACCESS_KEY_ID=redacted",
+        },
+        "memstream_s3",
+      ),
+    ).toBe(true);
+    expect(
+      changefeedJobMatchesConnection(
+        {
+          description:
+            "CREATE CHANGEFEED FOR TABLE orders INTO 'external://memstream_s3'",
+          sink_uri: "s3://memstream-cdc/cdc/?AWS_ACCESS_KEY_ID=redacted",
+        },
+        "memstream_550e8400e29b41d4a716446655440000",
+      ),
+    ).toBe(false);
   });
 });
 

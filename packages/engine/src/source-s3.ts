@@ -114,3 +114,42 @@ export class S3EventSource {
     this.pending = [];
   }
 }
+
+/** Keys under a CDC prefix (paginated). Used by the multi-profile S3 watcher. */
+export async function listS3ObjectKeys(options: {
+  bucket: string;
+  prefix: string;
+  region?: string;
+  client?: S3ListClient;
+}): Promise<string[]> {
+  const client =
+    options.client ??
+    (new S3Client({
+      region: options.region || process.env.AWS_REGION || "us-east-1",
+    }) as unknown as S3ListClient);
+  const keys: string[] = [];
+  let continuation: string | undefined;
+  while (true) {
+    const page = (await withResilience(resilientS3, () =>
+      client.send(
+        new ListObjectsV2Command({
+          Bucket: options.bucket,
+          Prefix: options.prefix,
+          ContinuationToken: continuation,
+        }),
+      ),
+    )) as {
+      Contents?: { Key?: string }[];
+      IsTruncated?: boolean;
+      NextContinuationToken?: string;
+    };
+    for (const item of page.Contents ?? []) {
+      const key = item.Key;
+      if (!key || key.endsWith("/")) continue;
+      keys.push(key);
+    }
+    if (!page.IsTruncated) break;
+    continuation = page.NextContinuationToken;
+  }
+  return keys;
+}

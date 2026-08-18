@@ -14,7 +14,28 @@ export type DeployConfigSecret = {
   DATABASE_URL?: string;
   MEMSTREAM_DATABASE_URL?: string;
   MEMSTREAM_SECRETS_KEY?: string;
+  DEMO_APPLICATION_DATABASE_URL?: string;
+  MEMSTREAM_DEMO_USER?: string;
+  MEMSTREAM_DEMO_PASSWORD?: string;
 };
+
+const SECRET_KEYS = [
+  "DATABASE_URL",
+  "MEMSTREAM_DATABASE_URL",
+  "MEMSTREAM_SECRETS_KEY",
+  "DEMO_APPLICATION_DATABASE_URL",
+  "MEMSTREAM_DEMO_USER",
+  "MEMSTREAM_DEMO_PASSWORD",
+] as const;
+
+function compactSecret(values: DeployConfigSecret): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of SECRET_KEYS) {
+    const v = values[key]?.trim();
+    if (v) out[key] = v;
+  }
+  return out;
+}
 
 /** Stable secret name per stack (EC2 demo or Lambda worker). */
 export function deployConfigSecretName(stackName: string): string {
@@ -34,11 +55,7 @@ export async function upsertDeployConfigSecret(options: {
 }): Promise<{ arn: string; name: string }> {
   const name = deployConfigSecretName(options.stackName);
   const client = new SecretsManagerClient({ region: options.region });
-  const secretString = JSON.stringify({
-    DATABASE_URL: options.values.DATABASE_URL || "",
-    MEMSTREAM_DATABASE_URL: options.values.MEMSTREAM_DATABASE_URL || "",
-    MEMSTREAM_SECRETS_KEY: options.values.MEMSTREAM_SECRETS_KEY || "",
-  });
+  const secretString = JSON.stringify(compactSecret(options.values));
 
   try {
     const created = await client.send(
@@ -91,18 +108,12 @@ export async function getDeployConfigSecret(
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      DATABASE_URL:
-        typeof parsed.DATABASE_URL === "string" ? parsed.DATABASE_URL : "",
-      MEMSTREAM_DATABASE_URL:
-        typeof parsed.MEMSTREAM_DATABASE_URL === "string"
-          ? parsed.MEMSTREAM_DATABASE_URL
-          : "",
-      MEMSTREAM_SECRETS_KEY:
-        typeof parsed.MEMSTREAM_SECRETS_KEY === "string"
-          ? parsed.MEMSTREAM_SECRETS_KEY
-          : "",
-    };
+    const secret: DeployConfigSecret = {};
+    for (const key of SECRET_KEYS) {
+      const v = parsed[key];
+      if (typeof v === "string" && v.trim()) secret[key] = v;
+    }
+    return secret;
   } catch {
     return {};
   }
@@ -121,11 +132,7 @@ export async function applyDeployConfigSecretFromEnv(
     "";
   if (!secretId) return false;
   const values = await getDeployConfigSecret(secretId, region);
-  for (const key of [
-    "DATABASE_URL",
-    "MEMSTREAM_DATABASE_URL",
-    "MEMSTREAM_SECRETS_KEY",
-  ] as const) {
+  for (const key of SECRET_KEYS) {
     const v = values[key]?.trim();
     if (v && !process.env[key]?.trim()) {
       process.env[key] = v;

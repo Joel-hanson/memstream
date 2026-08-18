@@ -64,6 +64,8 @@ export function EnableModal({
   onBack,
   onEnable,
   onClose,
+  replaceLiveLabel,
+  alongsideLiveLabel,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -92,6 +94,10 @@ export function EnableModal({
   onBack: () => void;
   onEnable: () => void;
   onClose: () => void;
+  /** When set, Enable will replace this live Memstream's changefeed. */
+  replaceLiveLabel?: string | null;
+  /** Other live profiles that keep streaming in parallel. */
+  alongsideLiveLabel?: string | null;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -126,6 +132,23 @@ export function EnableModal({
         </DialogHeader>
 
         <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto">
+          {enableProgress.phase === "idle" && alongsideLiveLabel ? (
+            <p className="border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {alongsideLiveLabel}
+              </span>{" "}
+              stays live. Enable starts a second changefeed on its own S3
+              prefix — existing memory keeps indexing.
+            </p>
+          ) : null}
+          {enableProgress.phase === "idle" && replaceLiveLabel ? (
+            <p className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              This profile is already live (
+              <span className="font-medium">{replaceLiveLabel}</span>
+              ). Enable replaces that changefeed only; other profiles keep
+              streaming.
+            </p>
+          ) : null}
           {enableProgress.phase === "idle" ? (
             <p className="border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               {deploy ? (

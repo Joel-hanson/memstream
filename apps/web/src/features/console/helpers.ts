@@ -70,6 +70,21 @@ export function pickPrimaryRun(runs: MemstreamRun[]): MemstreamRun | undefined {
   );
 }
 
+/** Succeeded or still enabling — hide Use demo / join this instead of Enable. */
+export function pickJoinableRun(
+  runs: MemstreamRun[],
+): MemstreamRun | undefined {
+  const trulyActive = runs.find(
+    (r) =>
+      isActiveRunStatus(r.status) && !enableStepsComplete(r.steps),
+  );
+  return (
+    trulyActive ||
+    runs.find((r) => r.status === RUN_STATUS.SUCCEEDED) ||
+    runs.find((r) => isActiveRunStatus(r.status) && enableStepsComplete(r.steps))
+  );
+}
+
 export function runProfileLabel(run: MemstreamRun): string {
   return (
     run.profile_path?.replace(/^profiles\//, "").replace(/\.yaml$/, "") ||

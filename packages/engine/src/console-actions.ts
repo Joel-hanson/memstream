@@ -8,6 +8,12 @@ import {
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  cdcWatchPrefix,
+  changefeedConnectionName,
+  changefeedConnectionNameForRun,
+  runCdcPrefix,
+} from "./cdc-prefix.js";
 import { cancelChangefeed, createChangefeed } from "./changefeed.js";
 import {
   getActiveConnection,
@@ -22,7 +28,11 @@ import {
   describeStackOutputs,
 } from "./deploy-aws.js";
 import { deployLambdaStack } from "./deploy-lambda.js";
-import { fetchPublicTables, proposeProfileDict } from "./discover.js";
+import {
+  fetchPublicTables,
+  proposeProfileDict,
+  sourceDatabaseFromUrl,
+} from "./discover.js";
 import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
 import type { Job } from "./jobs.js";
 import { bindJobToRun } from "./jobs.js";
@@ -40,6 +50,7 @@ import {
   getRun,
   listRuns,
   memstreamDatabaseUrl,
+  updateRunPrefix,
   updateRunProgress,
 } from "./runs.js";
 import { cdcScopeId } from "./state.js";
@@ -734,19 +745,23 @@ export async function runEnablePipeline(
     embedModel: string;
     root?: string;
     workerCompute?: WorkerCompute | string;
+    /** Reuse this workspace instead of inserting a new default connection. */
+    connectionId?: string | null;
   },
 ): Promise<Record<string, unknown>> {
   const root = options.root ?? repoRoot();
+  const watchPrefix = cdcWatchPrefix(options.prefix);
 
   let runId: string | null = null;
   try {
-    let connectionId: string | null = null;
+    let connectionId: string | null = options.connectionId?.trim() || null;
     try {
       const conn = await upsertConnection({
         databaseUrl: options.databaseUrl,
         bucket: options.bucket,
         region: options.region,
-        prefix: options.prefix,
+        prefix: watchPrefix,
+        id: connectionId || undefined,
         root,
       });
       connectionId = conn.id;
@@ -767,14 +782,19 @@ export async function runEnablePipeline(
       tables: options.tables,
       bucket: options.bucket,
       region: options.region,
-      prefix: options.prefix,
+      prefix: watchPrefix,
       stackName: options.stackName,
       appDatabaseUrl: options.databaseUrl,
       connectionId: connectionId || undefined,
       root,
     });
     runId = run?.id ?? null;
+    let sinkPrefix = watchPrefix;
+    let connectionName: string | undefined;
     if (runId) {
+      sinkPrefix = runCdcPrefix(watchPrefix, runId);
+      connectionName = changefeedConnectionName(runId);
+      await updateRunPrefix(runId, sinkPrefix, root);
       bindJobToRun(job, runId, async (snapshot) => {
         // Only mirror terminal status from the job (abort → failed). Mid-flight
         // "running" must not overwrite finishRun(succeeded) when a flush lags.
@@ -792,6 +812,9 @@ export async function runEnablePipeline(
         );
       });
       job.append(`Memstream run ${runId} (platform DB — durable)`);
+      job.append(
+        `CDC prefix ${sinkPrefix} (other profiles keep their own streams)`,
+      );
     } else {
       job.append(
         "MEMSTREAM_DATABASE_URL unset — enable continues without run history",
@@ -802,7 +825,7 @@ export async function runEnablePipeline(
       buildEnableSteps({
         tables: options.tables,
         bucket: options.bucket,
-        prefix: options.prefix,
+        prefix: sinkPrefix,
         deploy: options.deploy,
         stackName: options.stackName,
         embedModel: options.embedModel,
@@ -839,18 +862,19 @@ export async function runEnablePipeline(
       detail: `Connecting change storage…`,
     });
     job.append(
-      `${changes.label} → ${storage.label}: s3://${options.bucket}/${options.prefix}`,
+      `${changes.label} → ${storage.label}: s3://${options.bucket}/${sinkPrefix}`,
     );
     const result = await createChangefeed({
       databaseUrl: options.databaseUrl,
       bucket: options.bucket,
-      prefix: options.prefix,
+      prefix: sinkPrefix,
       region: options.region,
       tables: options.tables,
+      connectionName,
     });
     if (result.canceledJobs.length) {
       job.append(
-        `${changes.label}: canceled ${result.canceledJobs.length} prior job(s) before recreate`,
+        `${changes.label}: canceled ${result.canceledJobs.length} job(s) on ${result.connectionName} only`,
       );
     }
     job.append(`${changes.label}: ready (${result.jobRows} active job(s))`);
@@ -860,7 +884,7 @@ export async function runEnablePipeline(
     });
     job.setStep("s3", {
       status: JOB_STEP_STATUS.DONE,
-      detail: `s3://${options.bucket}/${options.prefix}`,
+      detail: `s3://${options.bucket}/${sinkPrefix}`,
     });
     job.setStep("embed", {
       status: JOB_STEP_STATUS.DONE,
@@ -896,7 +920,7 @@ export async function runEnablePipeline(
         root,
         databaseUrl: options.databaseUrl,
         bucket: options.bucket,
-        prefix: options.prefix,
+        prefix: watchPrefix,
         region: options.region,
         stackName: options.stackName,
         profilePath: options.profilePath,
@@ -1001,9 +1025,10 @@ export type TeardownResult = {
 };
 
 /**
- * Reverse enable for a Memstream run: cancel changefeeds, drop the external
- * connection, start CloudFormation delete when this was the last user of that
- * stack, then remove the run row. Keeps memory tables/chunks.
+ * Reverse enable for a Memstream run: cancel this run's changefeed, start
+ * CloudFormation delete when this was the last user of that stack, then
+ * remove the run row. Other profiles on the same database keep streaming.
+ * Keeps memory tables/chunks.
  */
 export async function teardownAndDeleteRun(
   runId: string,
@@ -1035,17 +1060,14 @@ export async function teardownAndDeleteRun(
     databaseUrl = conn?.database_url ?? null;
   }
 
-  const othersShareConnection =
-    Boolean(run.connection_id) &&
-    others.some((r) => r.connection_id === run.connection_id);
-
   if (!databaseUrl) {
     result.changefeed.reason = "could not resolve app database URL";
-  } else if (othersShareConnection) {
-    result.changefeed.reason =
-      "other Memstreams still use this connection — left stream running";
   } else {
-    const canceled = await cancelChangefeed({ databaseUrl });
+    const canceled = await cancelChangefeed({
+      databaseUrl,
+      connectionName: changefeedConnectionNameForRun(run),
+      prefix: run.prefix,
+    });
     result.changefeed = {
       skipped: false,
       canceledJobs: canceled.canceledJobs,
@@ -1084,7 +1106,11 @@ export async function proposeFromDatabase(options: {
   application?: string;
   /** When set, only these public tables are considered for the draft. */
   includeTables?: string[];
-}): Promise<{ profile: Record<string, unknown>; tables_scanned: string[] }> {
+}): Promise<{
+  profile: Record<string, unknown>;
+  tables_scanned: string[];
+  schema: Record<string, string[]>;
+}> {
   let tables = await fetchPublicTables(options.databaseUrl);
   const include = (options.includeTables || [])
     .map((t) => t.trim())
@@ -1095,12 +1121,22 @@ export async function proposeFromDatabase(options: {
       Object.entries(tables).filter(([name]) => allow.has(name)),
     );
   }
-  if (!Object.keys(tables).length) throw new Error("no public tables found");
+  if (!Object.keys(tables).length) {
+    const db = sourceDatabaseFromUrl(options.databaseUrl);
+    throw new Error(
+      `No application tables found in database “${db}”. Connect the database that holds your app tables.`,
+    );
+  }
   const profile = proposeProfileDict({
     application: options.application || "discovered-app",
     tables,
+    sourceDatabase: sourceDatabaseFromUrl(options.databaseUrl),
   });
-  return { profile, tables_scanned: Object.keys(tables).sort() };
+  return {
+    profile,
+    tables_scanned: Object.keys(tables).sort(),
+    schema: tables,
+  };
 }
 
 export async function saveProfileYaml(options: {

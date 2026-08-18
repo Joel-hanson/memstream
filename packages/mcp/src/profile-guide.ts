@@ -101,7 +101,7 @@ export function summarizeSchemaTables(
   tables: Record<string, string[]>,
   interesting: (columns: string[]) => string[],
   narrative: (columns: string[]) => string[],
-  watchable: (columns: string[]) => string[],
+  watchable: (columns: string[], table?: string) => string[],
 ): SchemaTableSummary[] {
   return Object.keys(tables)
     .sort()
@@ -109,7 +109,7 @@ export function summarizeSchemaTables(
       const columns = tables[name] || [];
       const interesting_columns = interesting(columns);
       const narrative_columns = narrative(columns);
-      const watchable_columns = watchable(columns);
+      const watchable_columns = watchable(columns, name);
       return {
         name,
         columns,

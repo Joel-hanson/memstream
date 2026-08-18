@@ -16,23 +16,36 @@ import {
   suggestedTokens,
   truncateTemplate,
 } from "@/lib/chunk-template";
+import { addableColumns, hasAnyRowRule } from "@/lib/draft-rule";
 
 type Props = {
   rules: ProfileRule[];
   ruleEnabled: Record<string, boolean>;
   onToggle: (name: string, enabled: boolean) => void;
   onChangeTemplate: (name: string, template: string) => void;
+  emptyHint?: string;
+  schema?: Record<string, string[]>;
+  onAddRule?: (table: string, column: string | null) => void;
 };
 
-function groupByTable(rules: ProfileRule[]): [string, ProfileRule[]][] {
+function groupTables(
+  rules: ProfileRule[],
+  schema: Record<string, string[]>,
+): [string, ProfileRule[]][] {
   const map = new Map<string, ProfileRule[]>();
+  const schemaNames = Object.keys(schema).sort();
+  for (const name of schemaNames) map.set(name, []);
   for (const rule of rules) {
     const table = rule.table || "other";
     const list = map.get(table);
     if (list) list.push(rule);
     else map.set(table, [rule]);
   }
-  return [...map.entries()];
+  if (!schemaNames.length) return [...map.entries()];
+  const extra = [...map.keys()].filter((k) => !schema[k]).sort();
+  return [...schemaNames, ...extra].map(
+    (k) => [k, map.get(k) || []] as [string, ProfileRule[]],
+  );
 }
 
 function ruleMatches(rule: ProfileRule, query: string): boolean {
@@ -55,25 +68,40 @@ export function RuleDraftList({
   ruleEnabled,
   onToggle,
   onChangeTemplate,
+  emptyHint,
+  schema = {},
+  onAddRule,
 }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [openTables, setOpenTables] = useState<Set<string>>(() => new Set());
   const initializedFor = useRef<string>("");
 
-  const allGroups = useMemo(() => groupByTable(rules), [rules]);
-  const multiTable = allGroups.length > 1;
-  const showFilter = rules.length >= 6 || multiTable;
+  const allGroups = useMemo(
+    () => groupTables(rules, schema),
+    [rules, schema],
+  );
+  const showTableHeaders =
+    allGroups.length > 1 || Object.keys(schema).length > 0;
+  const multiTable = showTableHeaders;
+  const showFilter = rules.length >= 6 || allGroups.length > 1;
 
   const filteredGroups = useMemo(() => {
-    const q = filter.trim();
+    const q = filter.trim().toLowerCase();
     return allGroups
-      .map(([table, tableRules]) => [
-        table,
-        q ? tableRules.filter((r) => ruleMatches(r, q)) : tableRules,
-      ] as [string, ProfileRule[]])
-      .filter(([, tableRules]) => tableRules.length > 0);
-  }, [allGroups, filter]);
+      .map(
+        ([table, tableRules]) =>
+          [
+            table,
+            q ? tableRules.filter((r) => ruleMatches(r, q)) : tableRules,
+          ] as [string, ProfileRule[]],
+      )
+      .filter(([table, tableRules]) => {
+        if (tableRules.length > 0) return true;
+        if (!q) return Object.keys(schema).length > 0;
+        return table.toLowerCase().includes(q);
+      });
+  }, [allGroups, filter, schema]);
 
   const filteredRules = useMemo(
     () => filteredGroups.flatMap(([, tableRules]) => tableRules),
@@ -85,20 +113,19 @@ export function RuleDraftList({
     isRuleOn(ruleEnabled, r.name),
   ).length;
 
-  // Collapse tables by default when there are multiple; keep first open.
-  // Re-init when the rule set identity changes (new propose / load).
+  // Keep scanned tables expanded so Add rule stays visible.
   useEffect(() => {
-    const key = rules.map((r) => r.name).join("\0");
+    const key = `${Object.keys(schema).sort().join("\0")}|${rules.map((r) => r.name).join("\0")}`;
     if (key === initializedFor.current) return;
     initializedFor.current = key;
     setFilter("");
     setExpanded(null);
-    if (allGroups.length <= 1) {
+    if (allGroups.length <= 8) {
       setOpenTables(new Set(allGroups.map(([t]) => t)));
     } else {
       setOpenTables(new Set([allGroups[0]![0]]));
     }
-  }, [rules, allGroups]);
+  }, [rules, allGroups, schema]);
 
   const prevFilter = useRef("");
   // While filtering, open matching groups. Clearing the filter collapses
@@ -134,7 +161,7 @@ export function RuleDraftList({
   return (
     <div className="border">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-        <TermHint hint="Each rule watches a table (and optional column changes). Matching writes become a memory chunk. Expand a rule to edit the wording.">
+        <TermHint hint="Every table from the scan is listed. Add a rule for any column, then expand it to edit the wording.">
           Rules
         </TermHint>
         <div className="flex items-center gap-2">
@@ -199,7 +226,10 @@ export function RuleDraftList({
       <ScrollArea className="h-72">
         {filteredGroups.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No rules match “{filter.trim()}”.
+            {rules.length === 0
+              ? emptyHint ||
+                "No rules from this schema yet. Re-scan, or start from a template."
+              : `No rules match “${filter.trim()}”.`}
           </p>
         ) : (
           <ul>
@@ -215,13 +245,17 @@ export function RuleDraftList({
                 <li key={table} className="border-b last:border-b-0">
                   {multiTable ? (
                     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-muted/80 px-3 py-1.5 backdrop-blur-sm">
-                      <Checkbox
-                        checked={someOn ? "indeterminate" : allOn}
-                        onCheckedChange={(checked) =>
-                          setTableEnabled(tableRules, checked === true)
-                        }
-                        aria-label={`Include all rules for ${table}`}
-                      />
+                      {tableRules.length ? (
+                        <Checkbox
+                          checked={someOn ? "indeterminate" : allOn}
+                          onCheckedChange={(checked) =>
+                            setTableEnabled(tableRules, checked === true)
+                          }
+                          aria-label={`Include all rules for ${table}`}
+                        />
+                      ) : (
+                        <span className="size-4 shrink-0" aria-hidden />
+                      )}
                       <button
                         type="button"
                         className="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 text-left"
@@ -242,10 +276,23 @@ export function RuleDraftList({
                           aria-hidden
                         />
                       </button>
+                      {onAddRule ? (
+                        <AddRuleSelect
+                          table={table}
+                          columns={schema[table] || []}
+                          tableRules={tableRules}
+                          onAdd={onAddRule}
+                        />
+                      ) : null}
                     </div>
                   ) : null}
                   {tableOpen ? (
                     <ul className="divide-y">
+                      {tableRules.length === 0 ? (
+                        <li className="px-3 py-2 text-xs text-muted-foreground">
+                          No rules yet. Add a column to watch.
+                        </li>
+                      ) : null}
                       {tableRules.map((rule) => {
                         const isOn = isRuleOn(ruleEnabled, rule.name);
                         const isOpen = expanded === rule.name;
@@ -284,18 +331,18 @@ export function RuleDraftList({
                                       {rule.name}
                                     </div>
                                     <div className="text-xs text-muted-foreground">
-                                      {multiTable ? null : (
+                                      {multiTable ? (
+                                        rule.when?.columns_changed?.length
+                                          ? rule.when.columns_changed.join(", ")
+                                          : "any row change"
+                                      ) : (
                                         <>
                                           {rule.table}
                                           {rule.when?.columns_changed?.length
                                             ? ` · ${rule.when.columns_changed.join(", ")}`
-                                            : ""}
+                                            : " · any row change"}
                                         </>
                                       )}
-                                      {multiTable &&
-                                      rule.when?.columns_changed?.length
-                                        ? rule.when.columns_changed.join(", ")
-                                        : null}
                                     </div>
                                   </div>
                                   <RiArrowDownSLine
@@ -334,6 +381,44 @@ export function RuleDraftList({
         )}
       </ScrollArea>
     </div>
+  );
+}
+
+function AddRuleSelect({
+  table,
+  columns,
+  tableRules,
+  onAdd,
+}: {
+  table: string;
+  columns: string[];
+  tableRules: ProfileRule[];
+  onAdd: (table: string, column: string | null) => void;
+}) {
+  const cols = addableColumns(columns, tableRules);
+  const canAny = !hasAnyRowRule(tableRules);
+  if (!cols.length && !canAny) return null;
+  return (
+    <select
+      className="h-6 max-w-28 shrink-0 cursor-pointer border border-border bg-background px-1 font-sans text-[10px] text-foreground"
+      aria-label={`Add rule on ${table}`}
+      defaultValue=""
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        const value = e.target.value;
+        e.target.value = "";
+        if (!value) return;
+        onAdd(table, value === "*" ? null : value);
+      }}
+    >
+      <option value="">Add rule…</option>
+      {canAny ? <option value="*">Any row change</option> : null}
+      {cols.map((col) => (
+        <option key={col} value={col}>
+          {col}
+        </option>
+      ))}
+    </select>
   );
 }
 

@@ -39,7 +39,7 @@ import {
 } from "./helpers";
 import type { BusyAction } from "./types";
 
-const SHOW_CONNECTION_HEALTH = true;
+const SHOW_CONNECTION_HEALTH = false;
 
 function healthBadgeVariant(
   status: string | undefined,

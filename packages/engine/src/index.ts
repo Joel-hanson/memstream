@@ -19,6 +19,25 @@ export {
   type InfraTemplateKindValue,
 } from "./constants.js";
 export {
+  isJoinableRun,
+  pickJoinableRun,
+  pickLiveRunForAppLabel,
+  type JoinableRun,
+} from "./pick-run.js";
+export {
+  LEGACY_CHANGEFEED_CONNECTION,
+  cdcWatchPrefix,
+  changefeedConnectionName,
+  changefeedConnectionNameForRun,
+  isRunScopedPrefix,
+  isUuid,
+  normalizeCdcPrefix,
+  pickRunForCdcKey,
+  runCdcPrefix,
+  runIdFromCdcKey,
+  type CdcPrefixRun,
+} from "./cdc-prefix.js";
+export {
   changedColumns,
   type ChangeEvent,
   type JsonObject,
@@ -74,7 +93,7 @@ export {
   tableFromKey,
 } from "./cdc-parse.js";
 export { FilesystemEventSource } from "./source-filesystem.js";
-export { S3EventSource, type S3ListClient } from "./source-s3.js";
+export { S3EventSource, listS3ObjectKeys, type S3ListClient } from "./source-s3.js";
 export { BedrockEmbedder, type BedrockInvokeClient } from "./embed-bedrock.js";
 export {
   CockroachMemoryStore,
@@ -110,11 +129,13 @@ export {
   proposeProfileDict,
   proposeProfileYaml,
   fetchPublicTables,
+  sourceDatabaseFromUrl,
 } from "./discover.js";
 export {
   buildS3Uri,
   cancelActiveChangefeedJobs,
   cancelChangefeed,
+  changefeedJobMatchesConnection,
   createChangefeed,
   isSafeSqlIdent,
   parseChangefeedTables,
@@ -186,6 +207,7 @@ export {
   listRuns,
   jobSnapshotFromRun,
   memstreamDatabaseUrl,
+  updateRunPrefix,
   updateRunProgress,
   type CreateRunInput,
   type MemstreamRun,
@@ -194,6 +216,7 @@ export {
 } from "./runs.js";
 export {
   DEMO_CONNECTION_NAME,
+  DEMO_WORKSPACE_ENABLED,
   activateConnection,
   deriveApplicationUrlFromPlatformUrl,
   ensureDemoConnection,
@@ -264,6 +287,12 @@ export {
   shouldSkipCdcKey,
   type ProcessCdcResult,
 } from "./process-cdc.js";
+export {
+  newCdcProfileCache,
+  processCdcS3Prefix,
+  profileForCdcKey,
+  type CdcProfileCache,
+} from "./cdc-route.js";
 export {
   cloudWorkerStackName,
   isPrebuiltRuntime,

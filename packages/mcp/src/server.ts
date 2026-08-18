@@ -318,7 +318,7 @@ export function createMcpServer(ctx: McpServerContext): McpServer {
         return textResult({
           connected: false,
           detail:
-            "No application connection. Use Memstream console Connect (demo workspace or Cloud/URL), then retry.",
+            "No application connection. Use Memstream console Connect (Cockroach Cloud or URL), then retry.",
         });
       }
       return textResult({
