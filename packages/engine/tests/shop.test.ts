@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { InMemoryShop, ShopError } from "../src/shop.js";
+import {
+  InMemoryShop,
+  missingShopColumns,
+  ShopError,
+  SHOP_USERS_COLUMNS,
+} from "../src/shop.js";
 
 describe("InMemoryShop placeOrder", () => {
   const dirs: string[] = [];
@@ -99,5 +104,25 @@ describe("InMemoryShop placeOrder", () => {
     expect(() => s.setUserRole({ userId: "u2", role: "owner" })).toThrow(
       ShopError,
     );
+  });
+});
+
+describe("missingShopColumns", () => {
+  it("detects a BYO users table that uses user_id instead of id", () => {
+    expect(
+      missingShopColumns(
+        ["user_id", "username", "email", "is_active"],
+        SHOP_USERS_COLUMNS,
+      ),
+    ).toEqual(["id", "org_id", "role"]);
+  });
+
+  it("accepts the Acme shop users schema", () => {
+    expect(
+      missingShopColumns(
+        ["id", "org_id", "email", "role", "updated_at"],
+        SHOP_USERS_COLUMNS,
+      ),
+    ).toEqual([]);
   });
 });

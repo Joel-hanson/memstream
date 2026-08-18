@@ -35,6 +35,11 @@ import {
 } from "./discover.js";
 import { APPLICATION_SCHEMA_SQL } from "./embedded-schema.js";
 import type { Job } from "./jobs.js";
+import {
+  demoSeedTableName,
+  formatSchemaStatementError,
+  shouldSkipDemoSeed,
+} from "./schema-sql.js";
 import { bindJobToRun } from "./jobs.js";
 import {
   buildEnableSteps,
@@ -164,6 +169,7 @@ export async function applySchema(
   databaseUrl: string,
   schemaPath?: string,
   _root = repoRoot(),
+  onSkip?: (detail: string) => void,
 ): Promise<number> {
   // Prefer explicit path (tests); otherwise embedded sql/application.sql — no disk on EC2.
   const sql = schemaPath
@@ -177,7 +183,19 @@ export async function applySchema(
         await client.query(stmt);
         applied += 1;
       } catch (err) {
-        if (!isVectorIndexError(err)) throw err;
+        if (shouldSkipDemoSeed(stmt, err)) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const table = demoSeedTableName(stmt);
+          onSkip?.(
+            table
+              ? `skipped demo seed for ${table} (${msg}) — keeping your existing table`
+              : `skipped demo seed (${msg})`,
+          );
+          continue;
+        }
+        if (!isVectorIndexError(err)) {
+          throw formatSchemaStatementError(stmt, err);
+        }
         // Legacy schema changer cannot build VECTOR INDEX — retry like sql/vector_index.sql
         await client.query(`SET CLUSTER SETTING feature.vector_index.enabled = true`);
         try {
@@ -844,7 +862,12 @@ export async function runEnablePipeline(
       detail: "Creating app tables + agent_memory_chunks (vector)…",
     });
     job.append(`${schema.label}: applying sql/application.sql on Connect DB…`);
-    const n = await applySchema(options.databaseUrl, undefined, root);
+    const n = await applySchema(
+      options.databaseUrl,
+      undefined,
+      root,
+      (detail) => job.append(`${schema.label}: ${detail}`),
+    );
     job.append(
       `${schema.label}: ready (${n} statements) — includes agent_memory_chunks VECTOR(1024)`,
     );

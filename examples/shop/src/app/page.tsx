@@ -6,11 +6,20 @@ export const dynamic = "force-dynamic";
 
 export default async function ShopPage() {
   const shop = await resolveShop();
+  const empty: Record<string, unknown>[] = [];
+  const settle = async <T,>(p: Promise<T> | T, fallback: T): Promise<T> => {
+    try {
+      return await p;
+    } catch (err) {
+      console.error("[shop] snapshot query failed", err);
+      return fallback;
+    }
+  };
   const [orders, stock, tickets, users] = await Promise.all([
-    Promise.resolve(shop.listOrders()),
-    Promise.resolve(shop.listStock()),
-    Promise.resolve(shop.listTickets()),
-    Promise.resolve(shop.listUsers()),
+    settle(Promise.resolve(shop.listOrders()), empty),
+    settle(Promise.resolve(shop.listStock()), empty),
+    settle(Promise.resolve(shop.listTickets()), empty),
+    settle(Promise.resolve(shop.listUsers()), empty),
   ]);
   return (
     <ShopClient

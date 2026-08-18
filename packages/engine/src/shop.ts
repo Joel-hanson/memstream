@@ -160,6 +160,39 @@ function asShopError(err: unknown, fallback: string): never {
   throw new ShopError(detail);
 }
 
+/** Columns the Acme shop expects on `users` (saas-security role-change demo). */
+export const SHOP_USERS_COLUMNS = ["id", "org_id", "email", "role"] as const;
+
+/** Return required columns that are missing from `have` (case-insensitive). */
+export function missingShopColumns(
+  have: Iterable<string>,
+  need: readonly string[],
+): string[] {
+  const set = new Set([...have].map((c) => String(c).toLowerCase()));
+  return need.filter((c) => !set.has(c.toLowerCase()));
+}
+
+type ShopSqlClient = {
+  query: (
+    text: string,
+    params?: unknown[],
+  ) => Promise<{ rows: Record<string, unknown>[] }>;
+};
+
+async function publicTableColumns(
+  client: ShopSqlClient,
+  table: string,
+): Promise<string[]> {
+  const result = await client.query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = $1`,
+    [table],
+  );
+  return result.rows.map((row) => String(row.column_name));
+}
+
 export function emitCdcFile(
   cdcDir: string,
   options: {
@@ -531,6 +564,8 @@ export class CockroachShop implements Shop {
   readonly cdcDir: string | null;
   readonly alsoEmitLocal: boolean;
   private ready: Promise<void> | null = null;
+  /** False when Connect DB already has a `users` table that isn't the Acme schema. */
+  private usersCompatible = false;
 
   constructor(options: {
     conninfo: string;
@@ -647,13 +682,24 @@ export class CockroachShop implements Shop {
               'Follow-up with Alex (c1) on late Field Lamp order 90 — shipping credit issued; case closed. Resume only if a new ticket opens.'
             )
           ON CONFLICT (id) DO NOTHING`);
-        await client.query(`
+        const userCols = await publicTableColumns(client, "users");
+        this.usersCompatible =
+          missingShopColumns(userCols, SHOP_USERS_COLUMNS).length === 0;
+        if (!this.usersCompatible) {
+          const missing = missingShopColumns(userCols, SHOP_USERS_COLUMNS);
+          console.warn(
+            `[memstream shop] skipping users seed — existing table is missing ${missing.join(", ")}`,
+          );
+        } else {
+          await client.query(`
           INSERT INTO users (id, org_id, email, role) VALUES
             ('u1', 'org-acme', 'admin@acme.test', 'member'),
             ('u2', 'org-acme', 'boss@acme.test', 'owner')
           ON CONFLICT (id) DO NOTHING`);
+        }
       }).catch((err) => {
         this.ready = null;
+        this.usersCompatible = false;
         asShopError(err, "failed to prepare shop schema");
       });
     }
@@ -718,6 +764,7 @@ export class CockroachShop implements Shop {
 
   async listUsers(): Promise<JsonRow[]> {
     await this.ensureReady();
+    if (!this.usersCompatible) return [];
     try {
       return await withClientObjects(this.conninfo, async (client) => {
         const result = await client.query(
@@ -1032,6 +1079,11 @@ export class CockroachShop implements Shop {
 
   async setUserRole(input: SetUserRoleInput): Promise<ShopActionResult> {
     await this.ensureReady();
+    if (!this.usersCompatible) {
+      throw new ShopError(
+        "connected users table does not match the shop schema (need id, org_id, email, role)",
+      );
+    }
     const { userId, role } = normalizeSetUserRole(input);
     try {
       const result = await withClientObjects(this.conninfo, async (client) => {
@@ -1077,7 +1129,7 @@ export class CockroachShop implements Shop {
   }
 }
 
-const shopKey = "__memstreamShop_v4";
+const shopKey = "__memstreamShop_v5";
 
 export function getShop(options?: {
   cdcDir?: string;

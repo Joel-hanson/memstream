@@ -88,7 +88,9 @@ CREATE INDEX IF NOT EXISTS agent_memory_chunks_connection_idx
 CREATE VECTOR INDEX IF NOT EXISTS agent_memory_chunks_embedding_idx
   ON agent_memory_chunks (embedding vector_cosine_ops);
 
--- Demo seed (idempotent) ----------------------------------------------------
+-- Demo seed (idempotent). Enable skips these if the connected DB already has
+-- the table with a different shape (e.g. users.user_id instead of users.id).
+-- ---------------------------------------------------------------------------
 
 INSERT INTO customers (id, name) VALUES
   ('c1', 'Alex'),
